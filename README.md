@@ -78,7 +78,7 @@ AppDaemon je volně spojené, vícevláknové, sandboxované prostředí pro spo
 3. Po instalaci přejděte do nastavení AppDaemon. Skript podporuje Chrome i Firefox. Důrazně doporučujeme nainstalovat oba prohlížeče! Pokud po aktualizaci doplňku Chrome přestane fungovat (což se občas stává), skript se automaticky pokusí přepnout na Firefox, aby stahování dat nebylo přerušeno.
    - v části "System Packages" přidejte:
      - pro Chrome: `chromium-driver` a `chromium`
-     - pro Firefox: `firefox`, `geckodriver`, `fontconfig`, `ttf-freefont`, `dbus`
+     - pro Firefox: `firefox-esr`, `fontconfig`, `fonts-freefont-ttf`, `dbus`
      *Pozn.: pokaždé vložte jeden název a stiskněte enter, je nutné přidávat postupně*
    - v části "Python packages" přidejte `selenium`, `pandas`, `numpy` a `bs4`. Pozn.: pokaždé vložte jeden název a stiskněte enter, je nutné přidávat postupně
    - Klikněte na "Uložit".
