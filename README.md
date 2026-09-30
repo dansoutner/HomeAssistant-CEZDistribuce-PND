@@ -86,7 +86,7 @@ Přihlašovací údaje k brokeru si doplněk PND převezme od Home Assistanta s�
    * **password** je heslo pro přihlášení
    * **data_interval** je interval dat, které budete chtít stahovat - například období fixace smlouvy. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
    * **elm** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. Zjistíte jej v Portále - viz obrázek níže
-   * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`
+   * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`. Převede se na malá písmena bez diakritiky a mezer (`Chata Šumava` → `chata_sumava`), protože Home Assistant jiné znaky v `entity_id` ani ve statistikách nepovoluje.
 
 ![](/obrazky/pnd-cislo-elektromeru.png)
 

@@ -5,9 +5,11 @@ import json
 import math
 import os
 import platform
+import re
 import shutil
 import sys
 import time
+import unicodedata
 import zipfile
 from datetime import datetime as dt
 from zoneinfo import ZoneInfo
@@ -90,6 +92,15 @@ def zip_folder(folder_path, output_path):
                 if os.path.abspath(file_path) == os.path.abspath(output_path):
                     continue
                 zipf.write(file_path, arcname=os.path.relpath(file_path, start=folder_path))
+
+
+def slugify(text):
+    """'TajnejHouse' -> 'tajnejhouse', 'Chata Šumava' -> 'chata_sumava'.
+
+    HA povoluje v entity_id i statistic_id jen [a-z0-9_] bez podtržítka na krajích a bez '__'.
+    """
+    text = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
 
 
 def conv_date(s):
@@ -331,8 +342,11 @@ class PndRun:
         self.password = meter["password"]
         self.datainterval = meter["data_interval"]
         self.ELM = str(meter["elm"])
-        self.id = meter.get("id") or ""
+        # id jde do entity_id, statistic_id i názvu složky, proto slug
+        self.id = slugify(meter.get("id") or "")
         self.suffix = f"_{self.id}" if self.id else ""
+        if meter.get("id") and meter["id"] != self.id:
+            log(f"id '{meter['id']}' upraveno na '{self.id}' (entity_id a statistic_id smí obsahovat jen a-z, 0-9 a _)", Colors.YELLOW)
         self.download_folder = os.path.join(OUTPUT_ROOT, f"pnd{self.suffix}")
         self.page = None
 

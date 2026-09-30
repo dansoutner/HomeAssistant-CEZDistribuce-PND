@@ -14,7 +14,8 @@ homeassistant_api: true
 services:
   - mqtt:need
 map:
-  - share:rw
+  - type: share
+    read_only: false
 options:
   meters:
     - username: ""
