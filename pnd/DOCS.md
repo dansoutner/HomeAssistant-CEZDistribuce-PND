@@ -2,6 +2,8 @@
 
 Doplněk se přihlásí do [Portálu naměřených dat](https://pnd.cezdistribuce.cz/), stáhne denní, intervalová a 15minutová data spotřeby a výroby a zapíše je do senzorů `sensor.pnd_*`. 15minutová data za celý interval nahraje jako hodinové statistiky `pnd:consumption` a `pnd:production`, které lze použít v Energy dashboardu. Po doběhnutí se sám vypne.
 
+Senzory se publikují přes **MQTT discovery** (zařízení „PND ELM &lt;číslo&gt;“) s retain, takže přežijí restart Home Assistanta. Doplněk proto vyžaduje doplněk **Mosquitto broker** a integraci **MQTT**. Přístup k brokeru si převezme automaticky.
+
 ## Nastavení
 
 ```yaml
@@ -29,6 +31,8 @@ actions:
       addon: xxxxxxxx_pnd   # slug doplňku, viz URL stránky doplňku
 mode: single
 ```
+
+Spouštěč na start Home Assistanta není potřeba, senzory mají po restartu hned poslední hodnoty z MQTT.
 
 ## Řešení problémů
 

@@ -4,7 +4,9 @@
 > 🎉 **Verze v2.0.0: AppDaemon už není potřeba!** 🎉
 > Skript nově běží jako samostatný doplněk (add-on) Home Assistanta s prohlížečem Playwright/Chromium. Odpadá ruční instalace systémových balíčků, token a konfigurace AppDaemonu.
 > * **Stávající uživatelé:** viz [Migrace z AppDaemon verze](#migrace-z-appdaemon-verze-v1x). Entity zůstávají stejné, dashboardy není nutné měnit.
-> * **Požadavky:** Home Assistant OS nebo Supervised (doplňky) na architektuře amd64 nebo aarch64 (např. Raspberry Pi 4/5 s 64bit OS). 32bit armv7 Playwright nepodporuje.
+> * **Požadavky:** Home Assistant OS nebo Supervised (doplňky) na architektuře amd64 nebo aarch64 (např. Raspberry Pi 4/5 s 64bit OS). 32bit armv7 Playwright nepodporuje. Od verze 2.1.0 je potřeba MQTT broker (doplněk **Mosquitto broker**) a integrace **MQTT**.
+>
+> **v2.1.0:** senzory se publikují přes MQTT discovery, takže **přežijí restart Home Assistanta** a není nutné spouštět doplněk po startu HA. Viz [Migrace na 2.1.0](#migrace-na-210).
 
 Script a nastavení Home Assistant slouží pro vyčítání dat o spotřebě a výrobě elektřiny z distribučního portálu https://www.cezdistribuce.cz/ v denních úhrnech.
 
@@ -13,7 +15,7 @@ Pokud se vám řešení líbí, můžete mne podpořit v další tvorbě a rozvo
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/ondrejv)
 
 
-Po správném nastavení a spuštění scripu vznikou v Home Assistant tyto senzory:
+Po správném nastavení a spuštění doplňku vznikne v Home Assistant zařízení **PND ELM &lt;číslo elektroměru&gt;** (integrace MQTT) s těmito senzory. Entity mají `unique_id`, dají se tedy v UI přejmenovat, přiřadit do oblasti apod., a díky MQTT retain přežijí restart Home Assistanta:
 
 * **sensor.pnd_data** (obsahujíc data výroby a spotřeby za vámi zvolený interval - např období vyúčtování)
 * **sensor.pnd_consumption** a **sensor.pnd_production** v KWh je to den zpětně souhrn za den (data se vyčítají po půlnoci za den zpětně)
@@ -21,7 +23,7 @@ Po správném nastavení a spuštění scripu vznikou v Home Assistant tyto senz
 * **sensor.pnd_production2consumption** poměr mezi výrobou a spotřebou s max hodnotou 100% (např. jako indikátor Virtuální Baterie)
 * **sensor.pnd_production2consumptionfull** stejný jako předchozí, bez omezení na 100%
 * **sensor.pnd_production2consumptionfloor** rezerva virtuální baterie, tj cokoliv co je nad 100% s minimem 0% pokud je poměr pod 100%
-* **sensor.pnd_running** kontrolní senzor který se zapne při spuštění a vypne při úspěšném dokončení (úspěšnost je +/-95%) lze použít v automatizaci pro opětovné spuštění skriptu
+* **binary_sensor.pnd_running** kontrolní senzor, který se zapne při spuštění a vypne po dokončení (i při chybě nebo pádu doplňku)
 * **sensor.pnd_script_duration** kontrolní senzor obsahující délku běhu skriptu (čas se nezapíše pokud se vyskytne chyba)
 * **sensor.pnd_script_status** kontrolní senzor obsahující stav skriptu:
   * Stav: Running - atribut Status: OK
@@ -37,15 +39,18 @@ Výsledkem pak může být například takovýto dashboard (návod na jeho výro
 ![](/obrazky/00-prehled.png)
 
 > [!CAUTION]
-> **POZOR: Pokud již máte ve svém HA výše uvedené entity, doplněk je přepíše.**
+> **POZOR: Pokud již máte ve svém HA entity se stejnými názvy (např. šablony ze starého `sensors.yaml`), odstraňte je před spuštěním doplňku, jinak dostanou nové entity příponu `_2`.**
 
 ## Co je potřeba
 1. Přihlášení do Distribučního Portálu
 2. [HomeAssistant](#homeassistant) (OS nebo Supervised)
+   - [MQTT broker](#mqtt-broker)
    - [Doplněk ČEZ Distribuce PND](#instalace-doplňku)
    - [Naplánování automatické aktualizace](#nastavení-automatické-aktualizace-dat)
    - [Řešení problémů](#%C5%99e%C5%A1en%C3%AD-probl%C3%A9m%C5%AF-se-skriptem)
+   - [Migrace na 2.1.0](#migrace-na-210)
    - [Migrace z AppDaemon verze](#migrace-z-appdaemon-verze-v1x)
+   - [Odinstalace](#odinstalace)
    - [ApexCharts Card](#instalace-apexcharts-card)
 3. [Tvorba Dashboardu](#tvorba-dashboardu)
 4. [Nápady a plány](#pl%C3%A1ny-a-n%C3%A1pady)
@@ -65,6 +70,13 @@ Po přihlášení ověřte, že máte k dispozici váš elektroměr v sekci "Mno
 ## HomeAssistant
 Pokud toto čtete, více k čemu je HomeAssistant dobrý, pokud přeci ne, více na [stránkách projektu](https://www.home-assistant.io/). Doplněk vyžaduje instalaci s podporou doplňků (Home Assistant OS nebo Supervised).
 
+### MQTT broker
+Doplněk předává data do Home Assistanta přes MQTT. Pokud MQTT ještě nepoužíváte:
+1. V "Nastavení" > "Doplňky" > "Obchod s doplňky" nainstalujte a spusťte doplněk **Mosquitto broker**.
+2. V "Nastavení" > "Zařízení a služby" potvrďte nalezenou integraci **MQTT**.
+
+Přihlašovací údaje k brokeru si doplněk PND převezme od Home Assistanta sám, nic dalšího se nenastavuje.
+
 ### Instalace doplňku
 1. V HA zvolte "Nastavení" > "Doplňky" > "Obchod s doplňky"
 2. Vpravo nahoře klikněte na tři tečky > "Repozitáře" a přidejte URL `https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND`
@@ -74,7 +86,7 @@ Pokud toto čtete, více k čemu je HomeAssistant dobrý, pokud přeci ne, více
    * **password** je heslo pro přihlášení
    * **data_interval** je interval dat, které budete chtít stahovat - například období fixace smlouvy. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
    * **elm** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. Zjistíte jej v Portále - viz obrázek níže
-   * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`
+   * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`. Převede se na malá písmena bez diakritiky a mezer (`Chata Šumava` → `chata_sumava`), protože Home Assistant jiné znaky v `entity_id` ani ve statistikách nepovoluje.
 
 ![](/obrazky/pnd-cislo-elektromeru.png)
 
@@ -125,11 +137,7 @@ actions:
 mode: single
 ```
 
-Pokud chcete stahovat data i po každém startu Home Assistanta, přidejte do automatizace další spouštěč:
-```yaml
-  - trigger: homeassistant
-    event: start
-```
+Spouštěč na start Home Assistanta není potřeba: senzory jsou uložené v MQTT brokeru a po restartu HA mají hned poslední hodnoty.
 
 ### Řešení problémů se skriptem
 Nejprve zkuste spustit znovu, skript simuluje pohyb na webové stránce a není garantováno, že stránka bude vždy stejná a skript doběhne úspěšně dokonce.
@@ -139,15 +147,30 @@ Pokud se vyskytne problém (např data se nestahují):
 * Po každém běhu (i neúspěšném) je vytvořený soubor /share/pnd/debug.zip se screenshoty a staženými daty. Soubor neobsahuje přihlašovací údaje - **při řešení problémů připojte tento soubor.** Ke složce /share se dostanete např. doplňkem File Editor nebo Samba.
 
 #### Časté problémy
-* Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro spuštění doplňku? Pokud ještě neuplynul čas do spuštění, spusťe automatizaci ručně
-* Doplněk nejde nainstalovat: zkontrolujte architekturu (Nastavení > Systém > Opravy > tři tečky > Informace o systému). Podporováno je jen amd64 a aarch64.
+* Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro spuštění doplňku? Pokud ještě neuplynul čas do spuštění, spusťte automatizaci ručně
+* Doplněk nejde nainstalovat: zkontrolujte architekturu (Nastavení > Systém > Opravy > tři tečky > Informace o systému). Podporováno je jen amd64 a aarch64. Dále je nutný nainstalovaný [MQTT broker](#mqtt-broker).
+* Entity mají příponu `_2` (např. `sensor.pnd_consumption_2`): v HA zůstala stará entita se stejným názvem, typicky šablona ze `sensors.yaml`. Odstraňte ji a v "Nastavení" > "Entity" přejmenujte novou entitu zpět.
+
+### Migrace na 2.1.0
+Senzory se nově vytvářejí přes MQTT discovery místo přímého zápisu stavů. `entity_id` zůstávají stejná, dashboardy a historie fungují dál. Zobrazované názvy se změní na „PND ELM &lt;číslo&gt; …“ a dají se přejmenovat v UI.
+1. Nainstalujte [MQTT broker](#mqtt-broker), pokud jej ještě nemáte.
+2. Pokud máte v konfiguraci šablony ze souboru `sensors.yaml` (PND Data, PND Consumption, …), odstraňte je a restartujte HA. Jinak by nové entity dostaly příponu `_2`.
+3. Z automatizace odstraňte spouštěč na start Home Assistanta (`trigger: homeassistant`, `event: start`) i případnou prodlevu. Už není potřeba.
+4. Aktualizujte doplněk a jednou jej spusťte.
 
 ### Migrace z AppDaemon verze (v1.x)
 1. Nainstalujte a nastavte doplněk dle [návodu výše](#instalace-doplňku). Hodnoty převezměte z `apps.yaml`: `PNDUserName` → `username`, `PNDUserPassword` → `password`, `ELM` → `elm`, `DataInterval` → `data_interval`, `id` → `id`.
-2. V automatizaci nahraďte akci `event: run_pnd` akcí `hassio.addon_start` (viz výše). Automatizaci na `APPDAEMON_READY` smažte.
+2. V automatizaci nahraďte akci `event: run_pnd` akcí `hassio.addon_start` (viz výše). Spouštěče `APPDAEMON_READY` a start Home Assistanta smažte.
 3. V `apps.yaml` odstraňte sekce `pnd` a `init_helper`, v HACS odinstalujte "CEZ Distribuce PND". Pokud AppDaemon nepoužíváte pro nic jiného, můžete jej odinstalovat.
+4. Proveďte také kroky z [Migrace na 2.1.0](#migrace-na-210) (MQTT broker, odstranění `sensors.yaml`).
 
-Entity zůstávají stejné, dashboardy ani `sensors.yaml` není nutné měnit.
+`entity_id` zůstávají stejná, dashboardy není nutné měnit.
+
+### Odinstalace
+Entity jsou uložené v MQTT brokeru (retain), po odinstalaci doplňku proto v HA zůstanou. Odstraníte je smazáním zařízení **PND ELM &lt;číslo&gt;** v "Nastavení" > "Zařízení a služby" > "MQTT", případně vyčištěním topiců v brokeru:
+```
+mosquitto_sub -h <broker> -u <uživatel> -P <heslo> -t 'homeassistant/+/pnd_<elm>/#' -t 'pnd/<elm>/#' --remove-retained -W 2
+```
 
 ### Instalace ApexCharts Card
 Postup instalace je uvedený na [stránkách projektu](https://github.com/RomRider/apexcharts-card)
@@ -306,11 +329,18 @@ viz /grafy/ApexCard-xxxxxxxx.yaml
 # Plány a nápady
 Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde na GitHubu
 - [ ] Zpracování více EANů (Elektroměrů)
-- [ ] Vyřešit unikátní ID senzorů, aby senzor byl spravovatelný v HA
+- [x] Vyřešit unikátní ID senzorů, aby senzor byl spravovatelný v HA
 - [x] Distribuce a aktualizace přes HACS
 - [x] Refactor některých částí pro stabilitu při timeoutech, bezpečnost a kvalitu kódu
       
 # Změny
+
+## v2.1.0
+ - [x] Senzory se publikují přes MQTT discovery s retain: přežijí restart Home Assistanta, spouštěč na start HA už není potřeba.
+ - [x] Entity mají `unique_id` a jsou seskupené pod zařízením „PND ELM &lt;číslo&gt;“ (spravovatelné v UI). `entity_id` zůstávají stejná.
+ - [x] Když doplněk spadne uprostřed běhu, `binary_sensor.pnd_running` se díky MQTT last will přepne na off.
+ - [x] Odstraněn ukázkový `sensors.yaml` (placeholdery už nejsou potřeba a kolidovaly by s MQTT entitami).
+ - [x] Nová závislost: MQTT broker (Mosquitto) a integrace MQTT.
 
 ## v2.0.0
  - [x] AppDaemon nahrazen samostatným doplňkem Home Assistanta (add-on repozitář), HACS distribuce ukončena.

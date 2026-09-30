@@ -60,6 +60,23 @@ jobs:
               b.close()
           "
 
+      # Chytí chyby, které py_compile nepozná (např. metoda omylem vyražená z třídy)
+      - name: Import check pnd.py
+        run: |
+          docker run --rm --entrypoint python3 "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" -c "
+          import sys; sys.path.insert(0, '/')
+          import pnd
+          for cls, methods in {
+              pnd.MqttPublisher: ['publish_discovery', 'set_state', 'close'],
+              pnd.PndRun: ['run', 'set_state', 'scrape', 'import_statistics'],
+              pnd.HomeAssistant: ['ws', 'last_sum_before', 'import_energy_statistics'],
+          }.items():
+              missing = [m for m in methods if not callable(getattr(cls, m, None))]
+              assert not missing, f'{cls.__name__} is missing {missing}'
+          assert pnd.slugify('Chata Šumava') == 'chata_sumava'
+          print('pnd.py import OK')
+          "
+
       - name: Push image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
