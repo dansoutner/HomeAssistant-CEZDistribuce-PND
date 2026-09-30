@@ -1,0 +1,69 @@
+name: Build add-on
+
+on:
+  push:
+    branches: [main]
+    paths: ["pnd/**", ".github/workflows/build.yaml"]
+  pull_request:
+    paths: ["pnd/**", ".github/workflows/build.yaml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint add-on config
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./pnd"
+
+  build:
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Nativní runnery pro obě architektury, bez emulace QEMU
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read add-on version
+        id: meta
+        run: |
+          echo "version=$(sed -n 's/^version: *//p' pnd/config.yaml | tr -d '"')" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.arch }}-addon-pnd" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: docker build -t "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" pnd/
+
+      # Ověří, že Chromium má všechny systémové knihovny a jde spustit
+      - name: Smoke test Chromium
+        run: |
+          docker run --rm --entrypoint python3 "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" -c "
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              b = p.chromium.launch()
+              page = b.new_page()
+              page.set_content('<h1>Naměřená data</h1>')
+              assert page.inner_text('h1') == 'Naměřená data'
+              print('Chromium', b.version, 'OK')
+              b.close()
+          "
+
+      - name: Push image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.image }}:latest"
+          docker push "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}"
+          docker push "${{ steps.meta.outputs.image }}:latest"
