@@ -1,0 +1,7 @@
+configuration:
+  meters:
+    name: Elektroměry
+    description: >-
+      Seznam elektroměrů ke stažení. username = e-mail do portálu, password = heslo,
+      elm = číslo elektroměru (bez "ELM "), data_interval = interval dat ve tvaru
+      "27.10.2023 00:00 - 27.10.2024 00:00", id = volitelná přípona entit (např. "chata" → sensor.pnd_consumption_chata).
