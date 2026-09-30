@@ -3,6 +3,7 @@ version: 2.0.0
 slug: pnd
 description: Stahuje denní a intervalová data spotřeby a výroby z Portálu naměřených dat ČEZ Distribuce
 url: https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND
+image: ghcr.io/dansoutner/{arch}-addon-pnd
 arch:
   - amd64
   - aarch64
