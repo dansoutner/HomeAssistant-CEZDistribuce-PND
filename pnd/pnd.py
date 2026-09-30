@@ -1,4 +1,4 @@
-ver = "v2.0.0"
+ver = "v2.1.0"
 import csv
 import datetime
 import json
@@ -12,6 +12,7 @@ import zipfile
 from datetime import datetime as dt
 from zoneinfo import ZoneInfo
 
+import paho.mqtt.client as mqtt
 import requests
 import websocket
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -24,6 +25,31 @@ UTC = datetime.timezone.utc
 QUARTER = datetime.timedelta(minutes=15)
 HOUR = datetime.timedelta(hours=1)
 STATS_CHUNK = 1000
+DISCOVERY_PREFIX = os.environ.get("MQTT_DISCOVERY_PREFIX", "homeassistant")
+
+# Entity publikované přes MQTT discovery. Klíč tvoří entity_id (sensor.pnd_<klíč>[_<id>]), vlastnosti
+# odpovídají atributům, které dřív doplněk posílal přes /api/states.
+ENERGY = {"device_class": "energy", "unit_of_measurement": "kWh"}
+PERCENT = {"unit_of_measurement": "%", "state_class": "measurement"}
+DIAGNOSTIC = {"entity_category": "diagnostic"}
+ENTITIES = {
+    "consumption": {"component": "sensor", "name": "Consumption", **ENERGY},
+    "production": {"component": "sensor", "name": "Production", **ENERGY},
+    "consumption_15min": {"component": "sensor", "name": "Consumption 15min", **ENERGY},
+    "production_15min": {"component": "sensor", "name": "Production 15min", **ENERGY},
+    "data": {"component": "sensor", "name": "Data", "icon": "mdi:database-arrow-down"},
+    "total_interval_consumption": {"component": "sensor", "name": "Total interval consumption", **ENERGY},
+    "total_interval_production": {"component": "sensor", "name": "Total interval production", **ENERGY},
+    "production2consumption": {"component": "sensor", "name": "Production to consumption",
+                               "icon": "mdi:home-battery-outline", **PERCENT},
+    "production2consumptionfull": {"component": "sensor", "name": "Production to consumption full", **PERCENT},
+    "production2consumptionfloor": {"component": "sensor", "name": "Production to consumption floor", **PERCENT},
+    "app_version": {"component": "sensor", "name": "App version", "icon": "mdi:check-decagram", **DIAGNOSTIC},
+    "script_status": {"component": "sensor", "name": "Script status", "icon": "mdi:list-status", **DIAGNOSTIC},
+    "script_duration": {"component": "sensor", "name": "Script duration", "icon": "mdi:timelapse", **DIAGNOSTIC},
+    "running": {"component": "binary_sensor", "name": "Running", "device_class": "running",
+                "payload_on": "on", "payload_off": "off", **DIAGNOSTIC},
+}
 
 
 class Colors:
@@ -150,7 +176,7 @@ def _normalize_ha_state(value):
 
 
 class HomeAssistant:
-    """Zápis stavů přes REST API. V add-onu přes Supervisor proxy, mimo HA přes HA_URL a HA_TOKEN."""
+    """Websocket API pro statistiky. V add-onu přes Supervisor proxy, mimo HA přes HA_URL a HA_TOKEN."""
 
     def __init__(self):
         token = os.environ.get("SUPERVISOR_TOKEN")
@@ -215,18 +241,92 @@ class HomeAssistant:
         self.ws(*({"type": "recorder/import_statistics", "metadata": metadata, "stats": stats[i:i + STATS_CHUNK]}
                   for i in range(0, len(stats), STATS_CHUNK)))
 
-    def set_state(self, entity_id, state, attributes=None):
-        payload = {"state": _normalize_ha_state(state), "attributes": attributes or {}}
-        try:
-            r = requests.post(f"{self.base}/states/{entity_id}", headers=self.headers, json=payload, timeout=30)
-            r.raise_for_status()
-        except Exception as e:
-            log(f"ERROR: Failed to set state of {entity_id}: {e}", Colors.RED)
+
+def mqtt_settings():
+    """Přístup k brokeru od Supervisoru (services: mqtt:need), mimo HA z env MQTT_*."""
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if token:
+        r = requests.get("http://supervisor/services/mqtt", headers={"Authorization": f"Bearer {token}"}, timeout=30)
+        r.raise_for_status()
+        return r.json()["data"]
+    return {
+        "host": os.environ.get("MQTT_HOST", "localhost"),
+        "port": int(os.environ.get("MQTT_PORT", "1883")),
+        "username": os.environ.get("MQTT_USER"),
+        "password": os.environ.get("MQTT_PASSWORD"),
+        "ssl": os.environ.get("MQTT_SSL", "").lower() == "true",
+    }
+
+
+class MqttPublisher:
+    """Entity jednoho elektroměru přes MQTT discovery. Vše retained, takže entity přežijí restart HA."""
+
+    def __init__(self, settings, elm, suffix):
+        self.elm = elm
+        self.suffix = suffix
+        self.base = f"pnd/{elm}"
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"pnd-addon-{elm}")
+        if settings.get("username"):
+            self.client.username_pw_set(settings["username"], settings.get("password"))
+        if settings.get("ssl"):
+            self.client.tls_set()
+        # Když doplněk spadne uprostřed běhu, broker sám přepne "running" na off
+        self.client.will_set(self.state_topic("running"), "off", qos=1, retain=True)
+        self.client.connect(settings["host"], int(settings["port"]), keepalive=60)
+        self.client.loop_start()
+        for _ in range(100):
+            if self.client.is_connected():
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(f"Nepodařilo se připojit k MQTT brokeru {settings['host']}:{settings['port']}")
+
+    def state_topic(self, key):
+        return f"{self.base}/{key}/state"
+
+    def _publish(self, topic, payload):
+        info = self.client.publish(topic, payload, qos=1, retain=True)
+        info.wait_for_publish(timeout=30)
+
+    def publish_discovery(self):
+        device = {
+            "identifiers": [f"pnd_{self.elm}"],
+            "name": f"PND ELM {self.elm}",
+            "manufacturer": "ČEZ Distribuce",
+            "model": "Portál naměřených dat",
+            "sw_version": ver,
+        }
+        origin = {"name": "ČEZ Distribuce PND add-on", "sw_version": ver,
+                  "support_url": "https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND"}
+        for key, entity in ENTITIES.items():
+            config = {k: v for k, v in entity.items() if k != "component"}
+            config.update({
+                "unique_id": f"pnd_{self.elm}_{key}",
+                "default_entity_id": f"{entity['component']}.pnd_{key}{self.suffix}",
+                "state_topic": self.state_topic(key),
+                "json_attributes_topic": f"{self.base}/{key}/attributes",
+                "device": device,
+                "origin": origin,
+            })
+            self._publish(f"{DISCOVERY_PREFIX}/{entity['component']}/pnd_{self.elm}/{key}/config", json.dumps(config))
+
+    def set_state(self, key, state, attributes=None):
+        state = _normalize_ha_state(state)
+        # "None" je v MQTT sensoru hodnota pro unknown
+        self._publish(self.state_topic(key), "None" if state == "unknown" else state)
+        self._publish(f"{self.base}/{key}/attributes", json.dumps(attributes or {}, ensure_ascii=False))
+
+    def close(self):
+        # Řádné odpojení = broker nepošle last will (running už je nastavené explicitně)
+        self.client.disconnect()
+        self.client.loop_stop()
 
 
 class PndRun:
-    def __init__(self, ha, meter):
+    def __init__(self, ha, mqtt_config, meter):
         self.ha = ha
+        self.mqtt_config = mqtt_config
+        self.mqtt = None
         self.username = meter["username"]
         self.password = meter["password"]
         self.datainterval = meter["data_interval"]
@@ -234,14 +334,16 @@ class PndRun:
         self.id = meter.get("id") or ""
         self.suffix = f"_{self.id}" if self.id else ""
         self.download_folder = os.path.join(OUTPUT_ROOT, f"pnd{self.suffix}")
-        self.entity_id_consumption = f"sensor.pnd_consumption{self.suffix}"
-        self.entity_id_production = f"sensor.pnd_production{self.suffix}"
         self.page = None
 
     # --- helpers -----------------------------------------------------------
 
-    def set_state(self, entity_id, state, attributes=None):
-        self.ha.set_state(entity_id, state, attributes)
+    def set_state(self, key, state, attributes=None):
+        """Stav entity z katalogu ENTITIES; atributy jsou jen ty dynamické (zbytek je v discovery)."""
+        try:
+            self.mqtt.set_state(key, state, attributes)
+        except Exception as e:
+            log(f"ERROR: Failed to publish state of {key}: {e}", Colors.RED)
 
     def x(self, xpath, root=None):
         return (root or self.page).locator(f"xpath={xpath}").first
@@ -304,13 +406,24 @@ class PndRun:
     # --- main flow ---------------------------------------------------------
 
     def run(self):
-        script_start_time = dt.now()
         log(f"********************* Starting {ver}{self.suffix} *********************", Colors.CYAN)
-        self.set_state(f"binary_sensor.pnd_running{self.suffix}", state="on")
-        self.set_state(f"sensor.pnd_script_status{self.suffix}", state="Running", attributes={
-            "status": "OK",
-            "friendly_name": "PND Script Status"
-        })
+        try:
+            self.mqtt = MqttPublisher(self.mqtt_config, self.ELM, self.suffix)
+            self.mqtt.publish_discovery()
+        except Exception as e:
+            # Bez brokeru nejde stav nikam zapsat, zbývá jen log doplňku
+            log(f"ERROR: MQTT: {e}", Colors.RED)
+            return False
+        log(f"MQTT discovery published for ELM {self.ELM}")
+        try:
+            return self._run()
+        finally:
+            self.mqtt.close()
+
+    def _run(self):
+        script_start_time = dt.now()
+        self.set_state("running", state="on")
+        self.set_state("script_status", state="Running", attributes={"status": "OK"})
         os.makedirs(self.download_folder, exist_ok=True)
         delete_folder_contents(self.download_folder)
 
@@ -336,24 +449,17 @@ class PndRun:
         except Exception as e:
             status = str(e) if isinstance(e, PndError) else f"ERROR: {type(e).__name__}: {e}"
             log(status, Colors.RED)
-            self.set_state(f"binary_sensor.pnd_running{self.suffix}", state="off")
-            self.set_state(f"sensor.pnd_script_status{self.suffix}", state="Error", attributes={
-                "status": status[:255],
-                "friendly_name": "PND Script Status"
-            })
+            self.set_state("running", state="off")
+            self.set_state("script_status", state="Error", attributes={"status": status[:255]})
             self.zip_debug()
             return False
 
-        self.set_state(f"binary_sensor.pnd_running{self.suffix}", state="off")
+        self.set_state("running", state="off")
         log("Sensor State Set to OFF")
         self.zip_debug()
         script_duration = dt.now() - script_start_time
-        self.set_state(f"sensor.pnd_script_duration{self.suffix}", state=script_duration, attributes={
-            "friendly_name": "PND Script Duration",
-        })
-        self.set_state(f"sensor.pnd_script_status{self.suffix}", state="Stopped", attributes={
-            "status": "Finished",
-        })
+        self.set_state("script_duration", state=script_duration)
+        self.set_state("script_status", state="Stopped", attributes={"status": "Finished"})
         log(f"********************* Duration: {script_duration} *********************", Colors.CYAN)
         log(f"********************* Finished {ver}{self.suffix} *********************", Colors.CYAN)
         return True
@@ -429,9 +535,7 @@ class PndRun:
         version_text = (version_element.text_content() or "").replace("\xa0", " ")
         parts = version_text.split(":", 1)
         version_number = (parts[1].strip() if len(parts) > 1 else version_text.strip()) or "unknown"
-        self.set_state(f"sensor.pnd_app_version{self.suffix}", state=version_number, attributes={
-            "friendly_name": "PND App Version",
-        })
+        self.set_state("app_version", state=version_number)
         log(f"App Version: {version_number}")
 
         self.first_pnd_window = page.locator(".pnd-window").first
@@ -548,24 +652,11 @@ class PndRun:
         log(f"Latest entry: {date_consumption_str} - {consumption_value} kWh", Colors.GREEN)
         log(f"Latest entry: {date_production_str} - {production_value} kWh", Colors.GREEN)
 
-        self.set_state(self.entity_id_consumption, state=consumption_value, attributes={
-            "friendly_name": "PND Consumption",
-            "device_class": "energy",
-            "unit_of_measurement": "kWh",
-            "date": yesterday_consumption.isoformat()
-        })
-        self.set_state(self.entity_id_production, state=production_value, attributes={
-            "friendly_name": "PND Production",
-            "device_class": "energy",
-            "unit_of_measurement": "kWh",
-            "date": yesterday_production.isoformat()
-        })
-        for kind, name in (("consumption", "PND Consumption 15min"), ("production", "PND Production 15min")):
+        self.set_state("consumption", state=consumption_value, attributes={"date": yesterday_consumption.isoformat()})
+        self.set_state("production", state=production_value, attributes={"date": yesterday_production.isoformat()})
+        for kind in ("consumption", "production"):
             quarters = read_15min_csv(os.path.join(self.download_folder, f"daily-{kind}-15min.csv"))
-            self.set_state(f"sensor.pnd_{kind}_15min{self.suffix}", state=f"{sum(q[1] for q in quarters):.3f}", attributes={
-                "friendly_name": name,
-                "device_class": "energy",
-                "unit_of_measurement": "kWh",
+            self.set_state(f"{kind}_15min", state=f"{sum(q[1] for q in quarters):.3f}", attributes={
                 "date": (quarters[0][0] - QUARTER).astimezone(PND_TZ).date().isoformat() if quarters else None,
                 "pndtime": [(end - QUARTER).astimezone(PND_TZ).isoformat() for end, _, _ in quarters],
                 kind: [round(kwh, 4) for _, kwh, _ in quarters],
@@ -621,21 +712,13 @@ class PndRun:
         consumption_str = [str(v) for _, v in data_consumption]
         production_str = [str(v) for _, v in data_production]
 
-        self.set_state(f"sensor.pnd_data{self.suffix}", state=dt.now().strftime("%Y-%m-%d %H:%M:%S"), attributes={
+        self.set_state("data", state=dt.now().strftime("%Y-%m-%d %H:%M:%S"), attributes={
             "pnddate": date_str, "consumption": consumption_str, "production": production_str
         })
         total_consumption = "{:.2f}".format(sum(v for _, v in data_consumption))
         total_production = "{:.2f}".format(sum(v for _, v in data_production))
-        self.set_state(f"sensor.pnd_total_interval_consumption{self.suffix}", state=total_consumption, attributes={
-            "friendly_name": "PND Total Interval Consumption",
-            "device_class": "energy",
-            "unit_of_measurement": "kWh"
-        })
-        self.set_state(f"sensor.pnd_total_interval_production{self.suffix}", state=total_production, attributes={
-            "friendly_name": "PND Total Interval Production",
-            "device_class": "energy",
-            "unit_of_measurement": "kWh"
-        })
+        self.set_state("total_interval_consumption", state=total_consumption)
+        self.set_state("total_interval_production", state=total_production)
         try:
             float_total_consumption = float(total_consumption)
             float_total_production = float(total_production)
@@ -648,21 +731,9 @@ class PndRun:
         capped_percentage_diff = round(min(float(percentage_diff), 100), 2)
         floored_min_percentage_diff = round(max(float(percentage_diff) - 100, 0), 2)
 
-        self.set_state(f"sensor.pnd_production2consumption{self.suffix}", state=str(capped_percentage_diff), attributes={
-            "friendly_name": "PND Interval Production to Consumption Max",
-            "state_class": "measurement",
-            "unit_of_measurement": "%"
-        })
-        self.set_state(f"sensor.pnd_production2consumptionfull{self.suffix}", state=str(percentage_diff), attributes={
-            "friendly_name": "PND Interval Production to Consumption Full",
-            "state_class": "measurement",
-            "unit_of_measurement": "%"
-        })
-        self.set_state(f"sensor.pnd_production2consumptionfloor{self.suffix}", state=str(floored_min_percentage_diff), attributes={
-            "friendly_name": "PND Interval Production to Consumption Floor",
-            "state_class": "measurement",
-            "unit_of_measurement": "%"
-        })
+        self.set_state("production2consumption", state=str(capped_percentage_diff))
+        self.set_state("production2consumptionfull", state=str(percentage_diff))
+        self.set_state("production2consumptionfloor", state=str(floored_min_percentage_diff))
         log("All Done - INTERVAL DATA PROCESSED")
         self.import_statistics()
 
@@ -695,9 +766,14 @@ def main():
         log("ERROR: V nastavení doplňku není vyplněn žádný elektroměr (meters)", Colors.RED)
         return 1
     ha = HomeAssistant()
+    try:
+        mqtt_config = mqtt_settings()
+    except Exception as e:
+        log(f"ERROR: Nepodařilo se zjistit přístup k MQTT brokeru (je nainstalovaný Mosquitto?): {e}", Colors.RED)
+        return 1
     ok = True
     for meter in meters:
-        ok = PndRun(ha, meter).run() and ok
+        ok = PndRun(ha, mqtt_config, meter).run() and ok
     return 0 if ok else 1
 
 

@@ -1,5 +1,5 @@
 name: ČEZ Distribuce PND
-version: 2.0.0
+version: 2.1.0
 slug: pnd
 description: Stahuje denní a intervalová data spotřeby a výroby z Portálu naměřených dat ČEZ Distribuce
 url: https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND
@@ -11,6 +11,8 @@ startup: once
 boot: manual
 init: false
 homeassistant_api: true
+services:
+  - mqtt:need
 map:
   - share:rw
 options:
