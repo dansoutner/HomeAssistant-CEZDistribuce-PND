@@ -321,11 +321,11 @@ class MqttPublisher:
             })
             self._publish(f"{DISCOVERY_PREFIX}/{entity['component']}/pnd_{self.elm}/{key}/config", json.dumps(config))
 
-    def set_state(self, key, state, attributes=None):
-        state = _normalize_ha_state(state)
-        # "None" je v MQTT sensoru hodnota pro unknown
-        self._publish(self.state_topic(key), "None" if state == "unknown" else state)
-        self._publish(f"{self.base}/{key}/attributes", json.dumps(attributes or {}, ensure_ascii=False))
+def set_state(self, key, state, attributes=None):
+    state = _normalize_ha_state(state)
+    # Pro unknown ponecháme doslovný řetězec "unknown" ("None" by se v HA zobrazilo jako text)
+    self._publish(self.state_topic(key), state)
+    self._publish(f"{self.base}/{key}/attributes", json.dumps(attributes or {}, ensure_ascii=False))
 
     def close(self):
         # Řádné odpojení = broker nepošle last will (running už je nastavené explicitně)
