@@ -277,20 +277,25 @@ class MqttPublisher:
         self.suffix = suffix
         self.base = f"pnd/{elm}"
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"pnd-addon-{elm}")
-        if settings.get("username"):
-            self.client.username_pw_set(settings["username"], settings.get("password"))
-        if settings.get("ssl"):
-            self.client.tls_set()
-        # Když doplněk spadne uprostřed běhu, broker sám přepne "running" na off
-        self.client.will_set(self.state_topic("running"), "off", qos=1, retain=True)
-        self.client.connect(settings["host"], int(settings["port"]), keepalive=60)
-        self.client.loop_start()
-        for _ in range(100):
-            if self.client.is_connected():
-                break
-            time.sleep(0.1)
-        else:
-            raise RuntimeError(f"Nepodařilo se připojit k MQTT brokeru {settings['host']}:{settings['port']}")
+        try:
+            if settings.get("username"):
+                self.client.username_pw_set(settings["username"], settings.get("password"))
+            if settings.get("ssl"):
+                self.client.tls_set()
+            # Když doplněk spadne uprostřed běhu, broker sám přepne "running" na off
+            self.client.will_set(self.state_topic("running"), "off", qos=1, retain=True)
+            self.client.connect(settings["host"], int(settings["port"]), keepalive=60)
+            self.client.loop_start()
+            for _ in range(100):
+                if self.client.is_connected():
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError(f"Nepodařilo se připojit k MQTT brokeru {settings['host']}:{settings['port']}")
+        except Exception:
+            self.client.disconnect()
+            self.client.loop_stop()
+            raise
 
     def state_topic(self, key):
         return f"{self.base}/{key}/state"
@@ -421,18 +426,19 @@ class PndRun:
 
     def run(self):
         log(f"********************* Starting {ver}{self.suffix} *********************", Colors.CYAN)
+        self.mqtt = None
         try:
             self.mqtt = MqttPublisher(self.mqtt_config, self.ELM, self.suffix)
             self.mqtt.publish_discovery()
+            log(f"MQTT discovery published for ELM {self.ELM}")
+            return self._run()
         except Exception as e:
             # Bez brokeru nejde stav nikam zapsat, zbývá jen log doplňku
             log(f"ERROR: MQTT: {e}", Colors.RED)
             return False
-        log(f"MQTT discovery published for ELM {self.ELM}")
-        try:
-            return self._run()
         finally:
-            self.mqtt.close()
+            if self.mqtt is not None:
+                self.mqtt.close()
 
     def _run(self):
         script_start_time = dt.now()
