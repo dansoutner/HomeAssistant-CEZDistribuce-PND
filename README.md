@@ -67,7 +67,7 @@ Pokud toto čtete, více k čemu je HomeAssistant dobrý, pokud přeci ne, více
 
 ### Instalace doplňku
 1. V HA zvolte "Nastavení" > "Doplňky" > "Obchod s doplňky"
-2. Vpravo nahoře klikněte na tři tečky > "Repozitáře" a přidejte URL `https://github.com/ondrejvysek/HomeAssistant-CEZDistribuce-PND`
+2. Vpravo nahoře klikněte na tři tečky > "Repozitáře" a přidejte URL `https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND`
 3. Obnovte stránku, v seznamu se objeví doplněk **ČEZ Distribuce PND**. Otevřete jej a klikněte na "Nainstalovat" (sestavení image trvá několik minut).
 4. Na záložce "Nastavení" vyplňte (přepněte do YAML režimu):
    * **username** je váš email s přihlášením do portálu
