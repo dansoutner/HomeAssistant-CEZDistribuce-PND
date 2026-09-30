@@ -147,7 +147,7 @@ Pokud se vyskytne problém (např data se nestahují):
 * Po každém běhu (i neúspěšném) je vytvořený soubor /share/pnd/debug.zip se screenshoty a staženými daty. Soubor neobsahuje přihlašovací údaje - **při řešení problémů připojte tento soubor.** Ke složce /share se dostanete např. doplňkem File Editor nebo Samba.
 
 #### Časté problémy
-* Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro spuštění doplňku? Pokud ještě neuplynul čas do spuštění, spusťe automatizaci ručně
+* Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro spuštění doplňku? Pokud ještě neuplynul čas do spuštění, spusťte automatizaci ručně
 * Doplněk nejde nainstalovat: zkontrolujte architekturu (Nastavení > Systém > Opravy > tři tečky > Informace o systému). Podporováno je jen amd64 a aarch64. Dále je nutný nainstalovaný [MQTT broker](#mqtt-broker).
 * Entity mají příponu `_2` (např. `sensor.pnd_consumption_2`): v HA zůstala stará entita se stejným názvem, typicky šablona ze `sensors.yaml`. Odstraňte ji a v "Nastavení" > "Entity" přejmenujte novou entitu zpět.
 
