@@ -5,3 +5,9 @@ configuration:
       Seznam elektroměrů ke stažení. username = e-mail do portálu, password = heslo,
       elm = číslo elektroměru (bez "ELM "), data_interval = interval dat ve tvaru
       "27.10.2023 00:00 - 27.10.2024 00:00", id = volitelná přípona entit (např. "chata" → sensor.pnd_consumption_chata).
+  spot_price_entity:
+    name: Entita spotové ceny
+    description: >-
+      Volitelné. Senzor s aktuální spotovou cenou za kWh nebo MWh (např. sensor.current_spot_electricity_price_15min).
+      Z jeho historie se počítají náklady na odběr: senzor sensor.pnd_consumption_cost a statistika pnd:consumption_cost
+      pro Energy dashboard. Jde jen o cenu silové elektřiny bez distribuce a poplatků.

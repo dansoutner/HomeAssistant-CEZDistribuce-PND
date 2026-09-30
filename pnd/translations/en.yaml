@@ -5,3 +5,9 @@ configuration:
       Meters to download. username = portal e-mail, password = portal password,
       elm = meter number (without "ELM "), data_interval = range in the form
       "27.10.2023 00:00 - 27.10.2024 00:00", id = optional entity suffix (e.g. "cottage" → sensor.pnd_consumption_cottage).
+  spot_price_entity:
+    name: Spot price entity
+    description: >-
+      Optional. Sensor with the current spot price per kWh or MWh (e.g. sensor.current_spot_electricity_price_15min).
+      Its history is used to compute consumption cost: sensor sensor.pnd_consumption_cost and statistic
+      pnd:consumption_cost for the Energy dashboard. Energy price only, without distribution and fees.

@@ -16,6 +16,8 @@ meters:
 
 Pro více elektroměrů přidejte další položku a vyplňte `id`. Entity pak dostanou příponu, např. `sensor.pnd_consumption_chata`.
 
+Volitelně `spot_price_entity: sensor.current_spot_electricity_price_15min` (senzor spotové ceny za kWh nebo MWh): doplněk spočítá náklady na odběr do `sensor.pnd_consumption_cost` a statistiky `pnd:consumption_cost` pro Energy dashboard. Ceny bere z historie senzoru (výchozí retence 10 dní) a jde jen o silovou elektřinu bez distribuce a poplatků.
+
 ## Spouštění
 
 Doplněk se spouští automatizací:

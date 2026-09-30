@@ -1,4 +1,4 @@
-ver = "v2.1.1"
+ver = "v2.2.0"
 import csv
 import datetime
 import json
@@ -51,7 +51,14 @@ ENTITIES = {
     "script_duration": {"component": "sensor", "name": "Script duration", "icon": "mdi:timelapse", **DIAGNOSTIC},
     "running": {"component": "binary_sensor", "name": "Running", "device_class": "running",
                 "payload_on": "on", "payload_off": "off", **DIAGNOSTIC},
+    # jen s nastavenou volbou spot_price_entity
+    "consumption_cost": {"component": "sensor", "name": "Consumption cost", "device_class": "monetary",
+                         "unit_of_measurement": "CZK", "icon": "mdi:cash"},
 }
+OPTIONAL_ENTITIES = {"consumption_cost"}
+CURRENCY = "CZK"
+# Historie stavů má v HA výchozí retenci 10 dní; starší ceny stejně nejsou k dispozici
+PRICE_HISTORY_DAYS = 14
 
 
 class Colors:
@@ -179,6 +186,76 @@ def hourly_statistics(quarters, base_sum):
     return stats
 
 
+def price_unit_factor(unit):
+    """Násobitel na cenu za kWh podle jednotky entity ('Kč/kWh' -> 1, 'CZK/MWh' -> 0.001)."""
+    unit = (unit or "").replace(" ", "").lower()
+    if unit.endswith("/mwh"):
+        return 0.001
+    if not unit.endswith("/kwh"):
+        log(f"WARNING: Neznámá jednotka ceny '{unit}', počítám s cenou za kWh", Colors.YELLOW)
+    return 1.0
+
+
+def parse_price_history(rows, factor=1.0):
+    """Kompaktní historie z websocketu ({'s': stav, 'lu': sekundy}) -> seřazené [(čas_utc, cena_za_kWh)]."""
+    history = []
+    for row in rows or []:
+        try:
+            price = float(row["s"]) * factor
+        except (KeyError, TypeError, ValueError):
+            continue  # unavailable / unknown
+        history.append((datetime.datetime.fromtimestamp(row["lu"], UTC), price))
+    return sorted(history)
+
+
+def quarter_prices(quarters, history):
+    """Cena každé čtvrthodiny = poslední změna stavu nejpozději 60 s po jejím začátku.
+
+    Senzor spotové ceny se přepíná pár ms po začátku bloku a historie začíná přeneseným stavem
+    předchozího bloku, proto tolerance. Čtvrthodiny před začátkem historie dostanou None.
+    """
+    tolerance = datetime.timedelta(seconds=60)
+    prices, j = [], -1
+    for end, _, _ in quarters:
+        limit = end - QUARTER + tolerance
+        while j + 1 < len(history) and history[j + 1][0] <= limit:
+            j += 1
+        prices.append(history[j][1] if j >= 0 else None)
+    return prices
+
+
+def hourly_cost_statistics(quarters, prices, base_sum):
+    """Hodinové náklady (kWh × cena) s kumulativní sumou od base_sum.
+
+    Jen celé hodiny, kde má cenu všech 4 čtvrthodin, a jen po poslední naměřenou čtvrthodinu.
+    """
+    measured = [i for i, q in enumerate(quarters) if q[2]]
+    if not measured:
+        return []
+    last = measured[-1] + 1
+    last_end = quarters[last - 1][0]
+    hours = {}
+    for (end, kwh, _), price in zip(quarters[:last], prices[:last]):
+        hour_start = (end - QUARTER).replace(minute=0, second=0, microsecond=0)
+        cost, priced = hours.get(hour_start, (0.0, 0))
+        if price is not None:
+            hours[hour_start] = (cost + kwh * price, priced + 1)
+        else:
+            hours[hour_start] = (cost, priced)
+    stats = []
+    total = base_sum
+    for hour_start, (cost, priced) in hours.items():
+        if hour_start + HOUR > last_end:
+            break
+        if priced < 4:
+            if stats:
+                break  # díra v historii cen: dál už nenavazovat
+            continue  # před začátkem historie cen
+        total += cost
+        stats.append({"start": hour_start.isoformat(), "sum": round(total, 4)})
+    return stats
+
+
 def _normalize_ha_state(value):
     if value is None:
         return "unknown"
@@ -245,17 +322,37 @@ class HomeAssistant:
         return (rows[-1].get("sum") or 0.0) if rows else 0.0
 
     def import_energy_statistics(self, statistic_id, name, stats):
+        self.import_sum_statistics(statistic_id, name, "kWh", "energy", stats)
+
+    def import_sum_statistics(self, statistic_id, name, unit, unit_class, stats):
+        """Externí statistika s kumulativní sumou; unit_class None pro jednotky bez převodu (měna)."""
         metadata = {
             "has_sum": True,
             "mean_type": 0,
             "name": name,
             "source": statistic_id.split(":", 1)[0],
             "statistic_id": statistic_id,
-            "unit_class": "energy",
-            "unit_of_measurement": "kWh",
+            "unit_class": unit_class,
+            "unit_of_measurement": unit,
         }
         self.ws(*({"type": "recorder/import_statistics", "metadata": metadata, "stats": stats[i:i + STATS_CHUNK]}
                   for i in range(0, len(stats), STATS_CHUNK)))
+
+    def price_history(self, entity_id, start, end):
+        """Historie ceny za kWh [(čas_utc, cena)]; jednotku (za kWh / MWh) bere z entity."""
+        state = requests.get(f"{self.base}/states/{entity_id}", headers=self.headers, timeout=30)
+        state.raise_for_status()
+        factor = price_unit_factor(state.json().get("attributes", {}).get("unit_of_measurement"))
+        [result] = self.ws({
+            "type": "history/history_during_period",
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "entity_ids": [entity_id],
+            "minimal_response": True,
+            "no_attributes": True,
+            "significant_changes_only": False,
+        })
+        return parse_price_history((result or {}).get(entity_id), factor)
 
 
 def mqtt_settings():
@@ -309,7 +406,7 @@ class MqttPublisher:
         info = self.client.publish(topic, payload, qos=1, retain=True)
         info.wait_for_publish(timeout=30)
 
-    def publish_discovery(self):
+    def publish_discovery(self, enabled_optional=()):
         device = {
             "identifiers": [f"pnd_{self.elm}"],
             "name": f"PND ELM {self.elm}",
@@ -320,6 +417,8 @@ class MqttPublisher:
         origin = {"name": "ČEZ Distribuce PND add-on", "sw_version": ver,
                   "support_url": "https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND"}
         for key, entity in ENTITIES.items():
+            if key in OPTIONAL_ENTITIES and key not in enabled_optional:
+                continue
             config = {k: v for k, v in entity.items() if k != "component"}
             config.update({
                 "unique_id": f"pnd_{self.elm}_{key}",
@@ -350,9 +449,10 @@ class MqttPublisher:
 
 
 class PndRun:
-    def __init__(self, ha, mqtt_config, meter):
+    def __init__(self, ha, mqtt_config, meter, spot_price_entity=None):
         self.ha = ha
         self.mqtt_config = mqtt_config
+        self.spot_price_entity = spot_price_entity
         self.mqtt = None
         self.username = meter["username"]
         self.password = meter["password"]
@@ -440,7 +540,7 @@ class PndRun:
         self.mqtt = None
         try:
             self.mqtt = MqttPublisher(self.mqtt_config, self.ELM, self.suffix)
-            self.mqtt.publish_discovery()
+            self.mqtt.publish_discovery({"consumption_cost"} if self.spot_price_entity else ())
             log(f"MQTT discovery published for ELM {self.ELM}")
             return self._run()
         except Exception as e:
@@ -662,8 +762,10 @@ class PndRun:
         # ------------------ DAILY -----------------------------
         # 15min profily (01/02) jako první: portál po přepnutí zobrazení znovu načítá naposledy otevřený
         # profil, a to má být lehký denní 08, ne 15min data za celý interval.
+        # Po „Vyhledat data“ se načítá profil, který portál pamatuje z minulého běhu (klidně 15min data
+        # za celý rok), a překrývá odkazy, proto delší timeout na první kliknutí.
         link_text = "01 Profil spotřeby (+A)"
-        self.open_profile(link_text, "denní", "daily-body-01")
+        self.open_profile(link_text, "denní", "daily-body-01", timeout=180000)
         self.download_csv(link_text, "daily-consumption-15min.csv", "denní")
         link_text = "02 Profil výroby (-A)"
         self.open_profile(link_text, "denní", "daily-body-02")
@@ -772,6 +874,8 @@ class PndRun:
         self.set_state("production2consumptionfloor", state=str(floored_min_percentage_diff))
         log("All Done - INTERVAL DATA PROCESSED")
         self.import_statistics()
+        if self.spot_price_entity:
+            self.update_costs()
 
     def import_statistics(self):
         """Nahraje 15min data celého intervalu jako hodinové externí statistiky (Energy dashboard)."""
@@ -791,6 +895,67 @@ class PndRun:
                 f"last sum {stats[-1]['sum'] if stats else '-'} kWh", Colors.GREEN)
         log("All Done - STATISTICS IMPORTED")
 
+    def update_costs(self):
+        """Náklady na odběr za spotovou cenu: senzor za poslední den a hodinová statistika.
+
+        Ceny se berou z historie stavů spot_price_entity (atributy mívají jen dnešek a zítřek),
+        takže jde dopočítat jen období, které HA ještě drží v historii (výchozí retence 10 dní).
+        Chyba tady nezastaví běh, zapíše se do atributu error senzoru nákladů.
+        """
+        entity = self.spot_price_entity
+        daily = read_15min_csv(os.path.join(self.download_folder, "daily-consumption-15min.csv"))
+        interval = read_15min_csv(os.path.join(self.download_folder, "range-consumption-15min.csv"))
+        day = (daily[0][0] - QUARTER).astimezone(PND_TZ).date().isoformat() if daily else None
+        try:
+            ends = [q[0] for q in daily + interval]
+            if not ends:
+                return
+            now = dt.now(UTC)
+            start = max(min(ends) - QUARTER, now - datetime.timedelta(days=PRICE_HISTORY_DAYS))
+            end = min(max(ends), now)
+            history = self.ha.price_history(entity, start, end)
+            if not history:
+                raise PndError(f"historie ceny {entity} je prázdná")
+
+            prices = quarter_prices(daily, history)
+            if not daily or None in prices:
+                raise PndError(f"historie ceny {entity} nepokrývá den {day}")
+            hours = {}
+            for (q_end, kwh, _), price in zip(daily, prices):
+                hour = (q_end - QUARTER).astimezone(PND_TZ).replace(minute=0).isoformat()
+                hours[hour] = hours.get(hour, 0.0) + kwh * price
+            kwh_total = sum(q[1] for q in daily)
+            cost_total = sum(hours.values())
+            self.set_state("consumption_cost", state=f"{cost_total:.2f}", attributes={
+                "date": day,
+                "consumption_kwh": round(kwh_total, 3),
+                "average_price": round(cost_total / kwh_total, 4) if kwh_total else None,
+                "price_entity": entity,
+                "hours": list(hours),
+                "cost": [round(v, 4) for v in hours.values()],
+            })
+            log(f"Cost {day}: {cost_total:.2f} {CURRENCY} for {kwh_total:.3f} kWh", Colors.GREEN)
+
+            statistic_id = f"pnd:consumption_cost{self.suffix}"
+            interval_prices = quarter_prices(interval, history)
+            first = next((i for i, p in enumerate(interval_prices) if p is not None), None)
+            if first is None:
+                log(f"WARNING: No price history for the interval, {statistic_id} not updated", Colors.YELLOW)
+                return
+            first_hour = (interval[first][0] - QUARTER).replace(minute=0, second=0, microsecond=0)
+            base = self.ha.last_sum_before(statistic_id, first_hour)
+            stats = hourly_cost_statistics(interval, interval_prices, base)
+            if stats:
+                self.ha.import_sum_statistics(statistic_id, "PND Consumption cost", CURRENCY, None, stats)
+            log(f"Statistics {statistic_id}: {len(stats)} hours imported, base {base:.2f}, "
+                f"last sum {stats[-1]['sum'] if stats else '-'} {CURRENCY}", Colors.GREEN)
+        except Exception as e:
+            reason = first_line(e)
+            log(f"ERROR: Failed to compute consumption cost: {reason}", Colors.RED)
+            self.set_state("consumption_cost", state=None, attributes={
+                "date": day, "price_entity": entity, "error": reason[:255],
+            })
+
 
 def main():
     log(f">>>>>>>>>>>> PND {ver}")
@@ -807,9 +972,12 @@ def main():
     except Exception as e:
         log(f"ERROR: Nepodařilo se zjistit přístup k MQTT brokeru (je nainstalovaný Mosquitto?): {e}", Colors.RED)
         return 1
+    spot_price_entity = (options.get("spot_price_entity") or "").strip() or None
+    if spot_price_entity:
+        log(f"Consumption cost from spot price entity {spot_price_entity}")
     ok = True
     for meter in meters:
-        ok = PndRun(ha, mqtt_config, meter).run() and ok
+        ok = PndRun(ha, mqtt_config, meter, spot_price_entity).run() and ok
     return 0 if ok else 1
 
 
