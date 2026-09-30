@@ -1,4 +1,4 @@
-ver = "v2.1.0"
+ver = "v2.1.1"
 import csv
 import datetime
 import json
@@ -66,6 +66,11 @@ class Colors:
 
 class PndError(Exception):
     """Chyba se zprávou, která se zapíše do atributu status senzoru pnd_script_status."""
+
+
+def first_line(exc):
+    """První řádek výjimky; Playwright přidává víceřádkový call log, do stavu stačí příčina."""
+    return (str(exc).strip().splitlines() or [type(exc).__name__])[0]
 
 
 def log(msg, color=""):
@@ -506,9 +511,11 @@ class PndRun:
             log(f"Opening Website: {PNDURL}")
             page.goto(PNDURL, wait_until="load", timeout=60000)
             log("Website Opened")
-        except Exception:
-            log("ERROR: Unable to open website - exiting", Colors.RED)
-            raise PndError("ERROR: Nepodařilo se otevřít webovou stránku PND portálu")
+        except Exception as e:
+            # Skutečná příčina (např. net::ERR_NAME_NOT_RESOLVED) je jinak k nalezení jen na error.png
+            reason = first_line(e)
+            log(f"ERROR: Unable to open website - exiting: {e}", Colors.RED)
+            raise PndError(f"ERROR: Nepodařilo se otevřít webovou stránku PND portálu: {reason}")
         log(f"Current URL: {page.url}")
 
         # Cookie banner

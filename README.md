@@ -149,22 +149,23 @@ Pokud se vyskytne problém (např data se nestahují):
 #### Časté problémy
 * Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro spuštění doplňku? Pokud ještě neuplynul čas do spuštění, spusťte automatizaci ručně
 * Doplněk nejde nainstalovat: zkontrolujte architekturu (Nastavení > Systém > Opravy > tři tečky > Informace o systému). Podporováno je jen amd64 a aarch64. Dále je nutný nainstalovaný [MQTT broker](#mqtt-broker).
-* Entity mají příponu `_2` (např. `sensor.pnd_consumption_2`): v HA zůstala stará entita se stejným názvem, typicky šablona ze `sensors.yaml`. Odstraňte ji a v "Nastavení" > "Entity" přejmenujte novou entitu zpět.
+* Entity mají příponu `_2` (např. `sensor.pnd_consumption_2`): při prvním spuštění 2.1.x v HA ještě existovala stará entita nebo stav se stejným názvem (šablona ze `sensors.yaml`, nebo stav zapsaný starší verzí doplňku či AppDaemonem, který zmizí až restartem HA). Odstraňte šablony, restartujte HA a pak v "Nastavení" > "Entity" přejmenujte entity `…_2` zpět na původní názvy.
 
 ### Migrace na 2.1.0
-Senzory se nově vytvářejí přes MQTT discovery místo přímého zápisu stavů. `entity_id` zůstávají stejná, dashboardy a historie fungují dál. Zobrazované názvy se změní na „PND ELM &lt;číslo&gt; …“ a dají se přejmenovat v UI.
+Senzory se nově vytvářejí přes MQTT discovery místo přímého zápisu stavů. `entity_id` zůstanou stejná, **pokud v HA v okamžiku prvního spuštění 2.1.x neexistuje entita ani stav se stejným názvem** (viz krok 3). Dashboardy a historie pak fungují dál. Zobrazované názvy se změní na „PND ELM &lt;číslo&gt; …“ a dají se přejmenovat v UI.
 1. Nainstalujte [MQTT broker](#mqtt-broker), pokud jej ještě nemáte.
-2. Pokud máte v konfiguraci šablony ze souboru `sensors.yaml` (PND Data, PND Consumption, …), odstraňte je a restartujte HA. Jinak by nové entity dostaly příponu `_2`.
-3. Z automatizace odstraňte spouštěč na start Home Assistanta (`trigger: homeassistant`, `event: start`) i případnou prodlevu. Už není potřeba.
-4. Aktualizujte doplněk a jednou jej spusťte.
+2. Pokud máte v konfiguraci šablony ze souboru `sensors.yaml` (PND Data, PND Consumption, …), odstraňte je.
+3. Aktualizujte doplněk a **před jeho prvním spuštěním restartujte Home Assistant**. Stavy zapsané starší verzí doplňku nebo AppDaemonem nejsou v registru entit, ale do restartu obsazují názvy entit, takže by nové entity dostaly příponu `_2`.
+4. Z automatizace odstraňte spouštěč na start Home Assistanta (`trigger: homeassistant`, `event: start`) i případnou prodlevu. Už není potřeba.
+5. Spusťte doplněk.
 
 ### Migrace z AppDaemon verze (v1.x)
 1. Nainstalujte a nastavte doplněk dle [návodu výše](#instalace-doplňku). Hodnoty převezměte z `apps.yaml`: `PNDUserName` → `username`, `PNDUserPassword` → `password`, `ELM` → `elm`, `DataInterval` → `data_interval`, `id` → `id`.
 2. V automatizaci nahraďte akci `event: run_pnd` akcí `hassio.addon_start` (viz výše). Spouštěče `APPDAEMON_READY` a start Home Assistanta smažte.
 3. V `apps.yaml` odstraňte sekce `pnd` a `init_helper`, v HACS odinstalujte "CEZ Distribuce PND". Pokud AppDaemon nepoužíváte pro nic jiného, můžete jej odinstalovat.
-4. Proveďte také kroky z [Migrace na 2.1.0](#migrace-na-210) (MQTT broker, odstranění `sensors.yaml`).
+4. Proveďte také kroky z [Migrace na 2.1.0](#migrace-na-210) (MQTT broker, odstranění `sensors.yaml`, restart HA před prvním spuštěním).
 
-`entity_id` zůstávají stejná, dashboardy není nutné měnit.
+Při dodržení těchto kroků `entity_id` zůstanou stejná a dashboardy není nutné měnit.
 
 ### Odinstalace
 Entity jsou uložené v MQTT brokeru (retain), po odinstalaci doplňku proto v HA zůstanou. Odstraníte je smazáním zařízení **PND ELM &lt;číslo&gt;** v "Nastavení" > "Zařízení a služby" > "MQTT", případně vyčištěním topiců v brokeru:
@@ -335,9 +336,13 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
       
 # Změny
 
+## v2.1.1
+ - [x] Při selhání otevření portálu se do logu i do atributu `status` senzoru `pnd_script_status` zapíše skutečná příčina (např. síťová chyba prohlížeče).
+ - [x] Oprava návodu k migraci na 2.1.x: před prvním spuštěním je nutný restart HA, jinak entity dostanou příponu `_2`.
+
 ## v2.1.0
  - [x] Senzory se publikují přes MQTT discovery s retain: přežijí restart Home Assistanta, spouštěč na start HA už není potřeba.
- - [x] Entity mají `unique_id` a jsou seskupené pod zařízením „PND ELM &lt;číslo&gt;“ (spravovatelné v UI). `entity_id` zůstávají stejná.
+ - [x] Entity mají `unique_id` a jsou seskupené pod zařízením „PND ELM &lt;číslo&gt;“ (spravovatelné v UI). `entity_id` zůstávají stejná, pokud se HA před prvním spuštěním restartuje (viz [Migrace na 2.1.0](#migrace-na-210)).
  - [x] Když doplněk spadne uprostřed běhu, `binary_sensor.pnd_running` se díky MQTT last will přepne na off.
  - [x] Odstraněn ukázkový `sensors.yaml` (placeholdery už nejsou potřeba a kolidovaly by s MQTT entitami).
  - [x] Nová závislost: MQTT broker (Mosquitto) a integrace MQTT.
