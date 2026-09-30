@@ -293,8 +293,8 @@ class MqttPublisher:
             else:
                 raise RuntimeError(f"Nepodařilo se připojit k MQTT brokeru {settings['host']}:{settings['port']}")
         except Exception:
-            self.client.disconnect()
-            self.client.loop_stop()
+            # Konstruktor nedoběhne, volající nemá co zavřít: zastavit vlákno smyčky tady
+            self.close()
             raise
 
     def state_topic(self, key):
@@ -326,16 +326,21 @@ class MqttPublisher:
             })
             self._publish(f"{DISCOVERY_PREFIX}/{entity['component']}/pnd_{self.elm}/{key}/config", json.dumps(config))
 
-def set_state(self, key, state, attributes=None):
-    state = _normalize_ha_state(state)
-    # Pro unknown ponecháme doslovný řetězec "unknown" ("None" by se v HA zobrazilo jako text)
-    self._publish(self.state_topic(key), state)
-    self._publish(f"{self.base}/{key}/attributes", json.dumps(attributes or {}, ensure_ascii=False))
+    def set_state(self, key, state, attributes=None):
+        state = _normalize_ha_state(state)
+        # Pro unknown ponecháme doslovný řetězec "unknown" ("None" by se v HA zobrazilo jako text)
+        self._publish(self.state_topic(key), state)
+        self._publish(f"{self.base}/{key}/attributes", json.dumps(attributes or {}, ensure_ascii=False))
 
     def close(self):
+        """Odpojí klienta a zastaví vlákno smyčky; bezpečné volat i po chybě nebo opakovaně."""
         # Řádné odpojení = broker nepošle last will (running už je nastavené explicitně)
-        self.client.disconnect()
-        self.client.loop_stop()
+        try:
+            self.client.disconnect()
+        except Exception as e:
+            log(f"MQTT disconnect failed: {e}", Colors.YELLOW)
+        finally:
+            self.client.loop_stop()
 
 
 class PndRun:
@@ -433,12 +438,15 @@ class PndRun:
             log(f"MQTT discovery published for ELM {self.ELM}")
             return self._run()
         except Exception as e:
-            # Bez brokeru nejde stav nikam zapsat, zbývá jen log doplňku
-            log(f"ERROR: MQTT: {e}", Colors.RED)
+            # Chyba MQTT (bez brokeru nejde stav nikam zapsat) nebo nečekaná chyba běhu:
+            # zbývá jen log doplňku, ostatní elektroměry se zpracují dál
+            log(f"ERROR: {type(e).__name__}: {e}", Colors.RED)
             return False
         finally:
+            # Úklid na všech cestách, i když selže publish_discovery() po úspěšném připojení
             if self.mqtt is not None:
                 self.mqtt.close()
+                self.mqtt = None
 
     def _run(self):
         script_start_time = dt.now()
