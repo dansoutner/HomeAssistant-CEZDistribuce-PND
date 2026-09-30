@@ -1,0 +1,27 @@
+name: ČEZ Distribuce PND
+version: 2.0.0
+slug: pnd
+description: Stahuje denní a intervalová data spotřeby a výroby z Portálu naměřených dat ČEZ Distribuce
+url: https://github.com/ondrejvysek/HomeAssistant-CEZDistribuce-PND
+arch:
+  - amd64
+  - aarch64
+startup: once
+boot: manual
+init: false
+homeassistant_api: true
+map:
+  - share:rw
+options:
+  meters:
+    - username: ""
+      password: ""
+      elm: ""
+      data_interval: "01.01.2026 00:00 - 01.01.2027 00:00"
+schema:
+  meters:
+    - username: str
+      password: password
+      elm: str
+      data_interval: str
+      id: str?

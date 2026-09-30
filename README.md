@@ -1,9 +1,10 @@
 # Home Assistant ČEZ Distribuce Portál Naměřených Dat
 
 > [!IMPORTANT]
-> 🎉 **DŮLEŽITÉ: Byla vydána verze v1.0.0 s podporou HACS a automatickým sjednocením enginů Chrome a Firefox!** 🎉
-> * **Stávající uživatelé:** Můžete si ponechat svou aktuální instalaci a aktualizovat ručně (překopírováním obsahu nového skriptu `pnd.py` - poroz, zde v repo je umístěný /apps/pnd/pnd.py, nikoliv v kořeni repo). Mějte ale na paměti, že v tomto režimu HACS nebude hlídat ani instalovat budoucí aktualizace. Doporučuji migraci na HACS - staačí odstranit původní pnd.py a provést instalaci přes HACS. Konfigurace,... je zachována.
-> * **Noví uživatelé:** Důrazně doporučujeme instalaci prostřednictvím HACS, který zajistí bezproblémové stahování i budoucí aktualizace skriptu.
+> 🎉 **Verze v2.0.0: AppDaemon už není potřeba!** 🎉
+> Skript nově běží jako samostatný doplněk (add-on) Home Assistanta s prohlížečem Playwright/Chromium. Odpadá ruční instalace systémových balíčků, token a konfigurace AppDaemonu.
+> * **Stávající uživatelé:** viz [Migrace z AppDaemon verze](#migrace-z-appdaemon-verze-v1x). Entity zůstávají stejné, dashboardy není nutné měnit.
+> * **Požadavky:** Home Assistant OS nebo Supervised (doplňky) na architektuře amd64 nebo aarch64 (např. Raspberry Pi 4/5 s 64bit OS). 32bit armv7 Playwright nepodporuje.
 
 Script a nastavení Home Assistant slouží pro vyčítání dat o spotřebě a výrobě elektřiny z distribučního portálu https://www.cezdistribuce.cz/ v denních úhrnech.
 
@@ -27,27 +28,29 @@ Po správném nastavení a spuštění scripu vznikou v Home Assistant tyto senz
   * Stav: Stopped - atribut Status: Finished
   * Stav: Error - atribut Status: chyba, kde se skript zastavil
 * **sensor.pnd_app_version** senzor s verzí aplikace PND
+* **sensor.pnd_consumption_15min** resp **sensor.pnd_production_15min** v kWh souhrn za včerejší den, v atributech `pndtime` (začátek čtvrthodiny) a `consumption` resp `production` 96 čtvrthodinových hodnot v kWh (vhodné pro ApexCharts)
+
+Kromě senzorů doplněk nahrává 15minutová data za celý interval (`data_interval`) jako **dlouhodobé statistiky** `pnd:consumption` a `pnd:production` (s `id` např. `pnd:consumption_chata`). Home Assistant ukládá statistiky po hodinách, čtvrthodiny se proto sčítají do hodinových kWh. Statistiky lze přidat do **Energy dashboardu** (Nastavení > Energie > Spotřeba ze sítě / Vrácení do sítě > vyhledat "PND Consumption" resp. "PND Production") včetně celé historie z intervalu. Při každém běhu se data za interval přepíšou, takže opravy dat na portále se promítnou zpětně.
 
 Výsledkem pak může být například takovýto dashboard (návod na jeho výrobu je popsán níže)
 
 ![](/obrazky/00-prehled.png)
 
 > [!CAUTION]
-> **POZOR: Pokud již používáte AppDaemon nebo máte ve svém HA výše uvedené entity, návod je potřeba odpovídajícím způsobem upravit, abyste zachovali to co již používáte. Takové úpravy nejsou v návodu uvedeny.**
+> **POZOR: Pokud již máte ve svém HA výše uvedené entity, doplněk je přepíše.**
 
 ## Co je potřeba
 1. Přihlášení do Distribučního Portálu
-2. [HomeAssistant](#homeassistant)
-   - [AddOn AppDaemon](#appdaemon)
-   - AddOn File Editor (nebo jakoukoliv možnost úpravy konfiguračních souborů v HA)
-   - Script pro stažení dat
-   - [Řešení problémů](#%C5%99e%C5%A1en%C3%AD-probl%C3%A9m%C5%AF-se-skriptem)
+2. [HomeAssistant](#homeassistant) (OS nebo Supervised)
+   - [Doplněk ČEZ Distribuce PND](#instalace-doplňku)
    - [Naplánování automatické aktualizace](#nastavení-automatické-aktualizace-dat)
-   - [HACS Instalace (Aplikace a PND Skript)](#instalace-hacs)
+   - [Řešení problémů](#%C5%99e%C5%A1en%C3%AD-probl%C3%A9m%C5%AF-se-skriptem)
+   - [Migrace z AppDaemon verze](#migrace-z-appdaemon-verze-v1x)
    - [ApexCharts Card](#instalace-apexcharts-card)
 3. [Tvorba Dashboardu](#tvorba-dashboardu)
 4. [Nápady a plány](#pl%C3%A1ny-a-n%C3%A1pady)
 5. [Změny (Changelog)](#změny)
+6. [Přispěvatelé a licence](#přispěvatelé)
 
 
 ## Distribuční portál
@@ -60,200 +63,91 @@ Po přihlášení ověřte, že máte k dispozici váš elektroměr v sekci "Mno
 ![](/obrazky/01-pnd.png)
 
 ## HomeAssistant
-Pokud toto čtete, více k čemu je HomeAssistant dobrý, pokud přeci ne, více na [stránkách projektu](https://www.home-assistant.io/).Kromě funkčního HomeAssistanta je nutné mít také k dispozici přihlašovací token, který snadno vytvoříte:
-1. Klikněte na vaše jméno vlevo dole
-2. Klikněte na záložku "Zabezpečení" nahoře
-3. V dolní části stránky klikněte na "Vytvořit token"
-4. Token pojmenujte např. "AppDaemon" (bez uvozovek) a klikněte na OK
-5. zobrazený token si zkopírujte, budete jej za chvíli potřebovat. **POZOR: Token se zobrazí pouze zde a pouze jednou, pokud si jej nezkopírujete, nebude již přístupný a bude nutné vytvořit nový**
+Pokud toto čtete, více k čemu je HomeAssistant dobrý, pokud přeci ne, více na [stránkách projektu](https://www.home-assistant.io/). Doplněk vyžaduje instalaci s podporou doplňků (Home Assistant OS nebo Supervised).
 
-![](/obrazky/02-hatoken.png)
+### Instalace doplňku
+1. V HA zvolte "Nastavení" > "Doplňky" > "Obchod s doplňky"
+2. Vpravo nahoře klikněte na tři tečky > "Repozitáře" a přidejte URL `https://github.com/ondrejvysek/HomeAssistant-CEZDistribuce-PND`
+3. Obnovte stránku, v seznamu se objeví doplněk **ČEZ Distribuce PND**. Otevřete jej a klikněte na "Nainstalovat" (sestavení image trvá několik minut).
+4. Na záložce "Nastavení" vyplňte (přepněte do YAML režimu):
+   * **username** je váš email s přihlášením do portálu
+   * **password** je heslo pro přihlášení
+   * **data_interval** je interval dat, které budete chtít stahovat - například období fixace smlouvy. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
+   * **elm** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. zjistíte jej v Portále - viz obrázek níže
+   * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`
 
-## AppDaemon
-AppDaemon je volně spojené, vícevláknové, sandboxované prostředí pro spouštění Pythonu, určené pro psaní automačních aplikací pro software domácí automatizace Home Assistant. Více o AppDaemon naleznete na [GitHubu autora](https://github.com/hassio-addons/addon-appdaemon)
-
-### Instalace a nastavení AppDaemon
-1. V nastavení HA zvolte "Doplňky" a dále pak "Obchod s doplňky"
-2. Vyhledejte AppDaemon, zvolte jej a klikněte na "Nainstalovat". Instalace dle rychlosti vašeho HW a internetu je hotova do několika minut.
-3. Po instalaci přejděte do nastavení AppDaemon. Skript podporuje Chrome i Firefox. Důrazně doporučujeme nainstalovat oba prohlížeče! Pokud po aktualizaci doplňku Chrome přestane fungovat (což se občas stává), skript se automaticky pokusí přepnout na Firefox, aby stahování dat nebylo přerušeno.
-   - v části "System Packages" přidejte:
-     - pro Chrome: `chromium-driver` a `chromium`
-     - pro Firefox: `firefox-esr`, `fontconfig`, `fonts-freefont-ttf`, `dbus`
-     *Pozn.: pokaždé vložte jeden název a stiskněte enter, je nutné přidávat postupně*
-   - v části "Python packages" přidejte `selenium`, `pandas`, `numpy` a `bs4`. Pozn.: pokaždé vložte jeden název a stiskněte enter, je nutné přidávat postupně
-   - Klikněte na "Uložit".
-4. Spusťte doplněk AppDaemon
-
-
-### Konfigurace prostředí AppDaemon
-1. V nastavení File editoru vypněte možnost "Enforce Basepath" a zvolte "Uložit" (doplněk se restartuje)
-2. Spusťte File File Editor a otevřete soubor _addon_configs/a0d7b954_appdaemon/appdaemon.yaml_. (pozor je nutné ve File Editoru přejít do kořenové složky, proto se nastavovala volba výše.
-3. v části plugins>HASS doplňte
-```
-ha_url: http://ip-adresa-nebo-url-vaseho-ha:8123
-token: vas-token-ktery-jste-si-vytvorili-vyse
-```
-4. v části appdaemon doplňte `app_dir: /homeassistant/appdaemon/apps`
-5. přidejte část:
-```
-logs:
-  pnd:
-    name: pnd
-    filename: /homeassistant/appdaemon/pnd.log
-```
-6. soubor uložte a restartujte doplněk AppDaemon
-
-Celý appdaemon.yaml vypadá nějak takto:
-```
----
-appdaemon:
-  latitude: 52.379189
-  longitude: 4.899431
-  elevation: 2
-  time_zone: Europe/Amsterdam
-  thread_duration_warning_threshold: 60
-  plugins:
-    HASS:
-      type: hass
-      ha_url: http://192.168.1.100:8123
-      token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-  app_dir: /homeassistant/appdaemon/apps
-http:
-  url: http://127.0.0.1:5050
-admin:
-api:
-hadashboard:
-logs:
-  pnd:
-    name: pnd
-    filename: /homeassistant/appdaemon/pnd.log
-```
-### Vytvoření aplikace PND v AppDaemon
-1. ve File Editor přejdět do složky homeassistant/
-2. vytvořte složku _appdaemon_ a přejděte do ní
-3. vytvořte složku _apps_ a přejděte do ní
-4. vytvořte složku _pnd_
-5. ve složce _apps_ vytvořte soubor _apps.yaml_ s obsahem:
-   * parametr **PNDUserName** je váš email s přihlášením do portálu
-   * parametr **PNDUserPassword** je heslo pro přihláše
-   * parametr **DataInterval** je interval dat, které budete chtít stahovat - například období fixace smlouvy. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
-   * parametr **ELM** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. zjistíte jej v Portále - viz obrázek níže
-     
 ![](/obrazky/pnd-cislo-elektromeru.png)
 
+```yaml
+meters:
+  - username: "vas email s prihlasenim do portalu distribuce"
+    password: "vase heslo do portalu distribuce"
+    elm: "3000012345"
+    data_interval: "27.10.2023 00:00 - 27.10.2024 00:00"
 ```
----
-init_helper:
-  module: init_helper
-  class: InitHelper
+Pro více elektroměrů přidejte do seznamu `meters` další položku s vyplněným `id`. Elektroměry se zpracují postupně v jednom běhu.
 
-pnd:
-  module: pnd
-  class: pnd
-  log: pnd
-  PNDUserName: "vas email s prihlasenim do portalu distribuce"
-  PNDUserPassword: "vase heslo do portalu distribuce"
-  DataInterval: "27.10.2023 00:00 - 27.10.2024 00:00"
-  ELM: "3000012345"
-  DownloadFolder: "/homeassistant/appdaemon/apps/pnd"
-```
-6. soubor uložte
-7. do složky _apps_ nahrajte soubor [pnd.py](https://raw.githubusercontent.com/ondrejvysek/HomeAssistant-CEZDistribuce-PND/refs/heads/main/pnd.py) - pozor, je nutné nahrát čistý skript, ideálně CTRL+C a CTRL+V ve FileEditoru.
-8. restartujte doplněk AppDaemon. Pozn.: při aktualizaci souboru pnd.py za novější, není nutné doplněk restartovat
+5. Uložte. Doplněk nechte zastavený a **nezapínejte** "Spustit při startu" ani "Watchdog": doplněk se po stažení dat sám vypne.
+
+Aktualizace doplňku hlídá Home Assistant sám a nabídne je stejně jako u ostatních doplňků.
 
 > [!CAUTION]
-> **POZOR: Data se neaktualizují sama od sebe, ale pouze automatickým nebo ručním spuštěním automatizace (viz níže)** případně ručním vyvoláním události run_pnd v nástrojích pro vývojáře.
+> **POZOR: Data se neaktualizují sama od sebe, ale pouze automatickým nebo ručním spuštěním doplňku (viz níže)**, případně tlačítkem "Spustit" na stránce doplňku.
 
 Při úspěšném chodu skriptu:
-* jsou vytvořeny soubory ve složce /homeassistant/appdaemon/apps/pnd
+* jsou vytvořeny soubory ve složce /share/pnd
 * je vypnut binární senzor pnd_running (pokud není tento senzor vypnut po cca 2 minutách, přejděte na [řešení problémů](#%C5%99e%C5%A1en%C3%AD-probl%C3%A9m%C5%AF-se-skriptem)
 
 ### Nastavení automatické aktualizace dat
-Skript, který získává data vyčkává na událost _run_pnd_ v rámci Home Assistant. Nejsnazší cestou je vytvoření automatizace, která v pravidelném čase stažení dat spustí.
-1. V Home Assistant zvolit "Nastavení" > "Automatizace a scény"
-2. Vytvořit novou automatizaci
-   * parametr "Když" > "Přidat spouštěč" zvolit "Čas" a zvolte čas, ve kterém se má spouštět. Data na portále jsou dostupná několik minut po půlnoci, můžete nastavit např. 00:30:00 AM tedy 30 minut po půlnoci se spustí.
-   * parametr "Pak provést" zvolit "Ruční událost" do "Typ události" zadat _run_pnd_
-3. Uložit automatizaci - zvolte jméno automatizace, které si přejete
+Nejsnazší cestou je vytvoření automatizace, která doplněk v pravidelném čase spustí akcí `hassio.addon_start`.
+1. Zjistěte slug doplňku: je to poslední část URL na stránce doplňku, např. `a1b2c3d4_pnd`
+2. V Home Assistant zvolte "Nastavení" > "Automatizace a scény" a vytvořte novou automatizaci
+   * spouštěč "Čas": data na portále jsou dostupná několik minut po půlnoci, můžete nastavit např. 00:30:00
+   * akce "Home Assistant Supervisor: Spustit doplněk" a vyberte ČEZ Distribuce PND
+3. Uložte automatizaci
 
-Ověřte funkčnost nastavení (AppDaemon, skript a automatizace) > vpravo nahoře tři tečky > "Spustit"
+Ověřte funkčnost nastavení > vpravo nahoře tři tečky > "Spustit"
 
-Chod skriptu trvá cca 50vteřin, poté byste měli vidět odpovídající entity v HA.
+Chod skriptu trvá cca 1 minutu, poté byste měli vidět odpovídající entity v HA.
 
 YAML kód automatizace
-```
+```yaml
 alias: Run PND
 description: ""
-trigger:
-  - platform: time
+triggers:
+  - trigger: time
     at: "00:30:00"
-condition: []
-action:
-  - event: run_pnd
-    event_data: {}
+conditions: []
+actions:
+  - action: hassio.addon_start
+    data:
+      addon: a1b2c3d4_pnd
 mode: single
 ```
 
-### Automatické spuštění po restartu AppDaemon
-Pokud chcete zajistit, aby se skript spustil automaticky po každém restartu AppDaemonu (např. po restartu celého Home Assistanta), můžete využít pomocný skript `init_helper.py` a automatizaci v Home Assistantu. Toto řešení pomáhá zejména v situacích, kdy se po startu systému skript sám nevyvolá (nápad a řešení od uživatele @wejto).
-
-Pomocný skript `init_helper.py` je součástí instalace a stačí jej pouze aktivovat v `apps.yaml` (viz [Vytvoření aplikace PND v AppDaemon](#vytvoření-aplikace-pnd-v-appdaemon)).
-
-V Home Assistantu pak vytvořte novou automatizaci (přepněte do YAML režimu), která zachytí událost `APPDAEMON_READY`:
+Pokud chcete stahovat data i po každém startu Home Assistanta, přidejte do automatizace další spouštěč:
 ```yaml
-alias: Run actions after AppDaemon starts
-description: Spustí PND po startu AppDaemonu s prodlevou 15 sekund pro zajištění závislostí
-trigger:
-  - platform: event
-    event_type: "APPDAEMON_READY"
-condition: []
-action:
-  - delay:
-      seconds: 15
-  - event: run_pnd
-    event_data: {}
-mode: single
+  - trigger: homeassistant
+    event: start
 ```
-Tímto zajistíte, že se skript spustí 15 sekund po úplném načtení všech aplikací v AppDaemonu.
 
 ### Řešení problémů se skriptem
-Nejprve zkuste spustit znovu, skript simuluje pohyb na webové stránce a není garantováno, že stránka bude vždy stejná a skript doběhne úspěšně dokonce, případně restartujte AppDaemon a spusťe skript znovu.
+Nejprve zkuste spustit znovu, skript simuluje pohyb na webové stránce a není garantováno, že stránka bude vždy stejná a skript doběhne úspěšně dokonce.
 
 Pokud se vyskytne problém (např data se nestahují):
-* Přepněte nastavení "Log Level" v AppDaemon na Info a restartujte AppDaemon.
-* V doplňku AppDaemon je záložka log, zobrazí kde přesně skript selhal (skript končí chybou) - **přidejte tento log do problému zde na GITu nebo v osobní komunikaci (na FB posílejte otisk obrazovky)**
-* Po doběhnutí skriptu (pokud neskončí chybou) je vytvořený soubor /homeassistant/appdaemon/apps/pnd/debug.zip. Obsahuje složku pnd. Soubor neobsahuje žádná osobní či přihlašovací data - **při řešení problémů připojte tento soubor.**
+* Na stránce doplňku je záložka "Log", zobrazí kde přesně skript selhal (a stav najdete i v atributu `status` senzoru `sensor.pnd_script_status`) - **přidejte tento log do problému zde na GITu nebo v osobní komunikaci (na FB posílejte otisk obrazovky)**
+* Po každém běhu (i neúspěšném) je vytvořený soubor /share/pnd/debug.zip se screenshoty a staženými daty. Soubor neobsahuje přihlašovací údaje - **při řešení problémů připojte tento soubor.** Ke složce /share se dostanete např. doplňkem File Editor nebo Samba.
 
 #### Časté problémy
-* Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro vyvolání události? Pokud ještě neuplynul čas do spuštění, spusťe automatizaci ručně
+* Postupoval jsem dle návodu, ale entity se neobjevily: Řešení - vytvořili jste automatizaci pro spuštění doplňku? Pokud ještě neuplynul čas do spuštění, spusťe automatizaci ručně
+* Doplněk nejde nainstalovat: zkontrolujte architekturu (Nastavení > Systém > Opravy > tři tečky > Informace o systému). Podporováno je jen amd64 a aarch64.
 
-### Instalace HACS
-Postup instalalce HACS do Home Assistant je uvedený na [stránkách projektu](https://hacs.xyz/).
+### Migrace z AppDaemon verze (v1.x)
+1. Nainstalujte a nastavte doplněk dle [návodu výše](#instalace-doplňku). Hodnoty převezměte z `apps.yaml`: `PNDUserName` → `username`, `PNDUserPassword` → `password`, `ELM` → `elm`, `DataInterval` → `data_interval`, `id` → `id`.
+2. V automatizaci nahraďte akci `event: run_pnd` akcí `hassio.addon_start` (viz výše). Automatizaci na `APPDAEMON_READY` smažte.
+3. V `apps.yaml` odstraňte sekce `pnd` a `init_helper`, v HACS odinstalujte "CEZ Distribuce PND". Pokud AppDaemon nepoužíváte pro nic jiného, můžete jej odinstalovat.
 
-> [!WARNING]
-> **DŮLEŽITÉ: Povolení AppDaemon v HACS**
-> Aplikace AppDaemon nejsou v HACS vidět ve výchozím stavu a musí se nejprve zapnout v nastavení. Postupujte takto:
-> 1. V Home Assistant otevřete **Nastavení (Settings) > Zařízení a služby (Devices & services)**.
-> 2. Vyhledejte integraci **HACS** a klikněte na ni.
-> 3. Klikněte na **Konfigurovat (Configure)**.
-> 4. Zaškrtněte možnost **Enable AppDaemon apps discovery & tracking**.
-> 5. Klikněte na **Potvrdit (Submit)**.
-
-Jakmile máte AppDaemon v HACS povolený, můžete tento PND skript přidat jako vlastní repozitář (Custom Repository):
-1. Otevřete HACS v Home Assistant.
-2. Přejděte do sekce **AppDaemon**.
-3. Vpravo nahoře klikněte na tři tečky a zvolte **Vlastní repozitáře (Custom repositories)**.
-4. Do pole "Repository" vložte URL tohoto repozitáře: `https://github.com/ondrejvysek/HomeAssistant-CEZDistribuce-PND`
-5. V poli "Category" vyberte **AppDaemon** (pokud se AppDaemon v nabídce neukazuje, ujistěte se, že jste splnili kroky k jeho povolení výše).
-6. Klikněte na "Add" (Přidat).
-7. Nyní najdete "CEZ Distribuce PND" v seznamu AppDaemon aplikací v HACS. Klikněte na něj a dejte "Download" (Stáhnout). *(HACS automaticky stáhne nejnovější verzi do složky /homeassistant/appdaemon/apps/HACS-CEZ-PND/)*
-8. Dále musíte nakonfigurovat `apps.yaml` podle kroků popsaných [výše v části "Vytvoření aplikace PND v AppDaemon"](#vytvoření-aplikace-pnd-v-appdaemon). Následné aktualizace skriptu `pnd.py` už bude hlídat a stahovat HACS.
-
-**Jak HACS kontroluje aktualizace:**
-HACS automaticky na pozadí kontroluje nové verze (GitHub Releases). Pokud autor vydá novou verzi, HACS vám ukáže dostupnou aktualizaci podobně jako u jiných Home Assistant integrací a umožní vám ji jedním kliknutím stáhnout.
-
-> [!CAUTION]
-> AppDaemon nemusí detekovat novou verzi po aktualizaci, doporučuji po aktualizaci ručně restartovat AppDaemon
+Entity zůstávají stejné, dashboardy ani `sensors.yaml` není nutné měnit.
 
 ### Instalace ApexCharts Card
 Postup instalace je uvedený na [stránkách projektu](https://github.com/RomRider/apexcharts-card)
@@ -414,9 +308,18 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
 - [ ] Zpracování více EANů (Elektroměrů)
 - [ ] Vyřešit unikátní ID senzorů, aby senzor byl spravovatelný v HA
 - [x] Distribuce a aktualizace přes HACS
-- [ ] Refactor některých částí pro stabilitu při timeoutech, bezpečnost a kvalitu kódu
+- [x] Refactor některých částí pro stabilitu při timeoutech, bezpečnost a kvalitu kódu
       
 # Změny
+
+## v2.0.0
+ - [x] AppDaemon nahrazen samostatným doplňkem Home Assistanta (add-on repozitář), HACS distribuce ukončena.
+ - [x] Selenium (Chrome + Firefox fallback) nahrazeno Playwright/Chromium v oficiálním image, odpadá ruční instalace balíčků a token.
+ - [x] Spouštění akcí `hassio.addon_start` místo události `run_pnd`, `init_helper` odstraněn.
+ - [x] Spolehlivější stahování CSV (čekání na skutečné stažení místo pevné pauzy).
+ - [x] Při jakékoliv chybě se vypne `pnd_running`, nastaví `pnd_script_status` na Error a vytvoří `debug.zip` se screenshotem `error.png`.
+ - [x] Podpora více elektroměrů v jednom běhu (seznam `meters`).
+ - [x] Stahování 15minutových profilů (01/02): senzory `pnd_consumption_15min` / `pnd_production_15min` se čtvrthodinami za včerejšek a hodinové dlouhodobé statistiky `pnd:consumption` / `pnd:production` pro Energy dashboard. CSV soubory `*-15min.csv` jsou v `/share/pnd`.
 
 ## 20.4.2026 v1.0.1
  - [x] Přidána podpora pro automatické spuštění po restartu AppDaemon (díky @wejto).
@@ -499,3 +402,14 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
 - [x] Změna vyhledání intervalu z ID na nadřazený název
 - [x] Vynucení "Výchozí sestava" a "Všechny EANy"
 - [x] Vytvořen changelog
+
+# Přispěvatelé
+* **[ondrejvysek](https://github.com/ondrejvysek)**: autor projektu
+* **Daniel Soutner**: přechod z AppDaemon na samostatný doplněk s Playwrightem, 15minutová data a statistiky pro Energy dashboard (v2.0.0)
+* **[Claude Code](https://claude.com/claude-code)** (AI asistent od Anthropic): implementace v2.0.0 ve spolupráci s Danielem Soutnerem
+* [@waclaw66](https://github.com/waclaw66), [@wejto](https://github.com/wejto), [@tomasherman](https://github.com/tomasherman), Karel Lowprize K a další, viz [seznam přispěvatelů na GitHubu](https://github.com/ondrejvysek/HomeAssistant-CEZDistribuce-PND/graphs/contributors)
+
+Chcete se přidat? Pošlete pull request a doplňte se do tohoto seznamu.
+
+# Licence
+Projekt je šířen pod licencí [MIT](LICENSE).
