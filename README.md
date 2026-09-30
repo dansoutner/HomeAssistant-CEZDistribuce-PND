@@ -73,7 +73,7 @@ Pokud toto čtete, více k čemu je HomeAssistant dobrý, pokud přeci ne, více
    * **username** je váš email s přihlášením do portálu
    * **password** je heslo pro přihlášení
    * **data_interval** je interval dat, které budete chtít stahovat - například období fixace smlouvy. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
-   * **elm** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. zjistíte jej v Portále - viz obrázek níže
+   * **elm** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. Zjistíte jej v Portále - viz obrázek níže
    * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`
 
 ![](/obrazky/pnd-cislo-elektromeru.png)
