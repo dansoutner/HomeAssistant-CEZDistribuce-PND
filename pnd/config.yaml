@@ -1,5 +1,5 @@
 name: ČEZ Distribuce PND
-version: 2.1.1
+version: 2.2.0
 slug: pnd
 description: Stahuje denní a intervalová data spotřeby a výroby z Portálu naměřených dat ČEZ Distribuce
 url: https://github.com/dansoutner/HomeAssistant-CEZDistribuce-PND
@@ -29,3 +29,4 @@ schema:
       elm: str
       data_interval: str
       id: str?
+  spot_price_entity: str?

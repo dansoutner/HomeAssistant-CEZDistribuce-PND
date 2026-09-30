@@ -68,8 +68,8 @@ jobs:
           import pnd
           for cls, methods in {
               pnd.MqttPublisher: ['publish_discovery', 'set_state', 'close'],
-              pnd.PndRun: ['run', 'set_state', 'scrape', 'import_statistics'],
-              pnd.HomeAssistant: ['ws', 'last_sum_before', 'import_energy_statistics'],
+              pnd.PndRun: ['run', 'set_state', 'scrape', 'import_statistics', 'update_costs'],
+              pnd.HomeAssistant: ['ws', 'last_sum_before', 'import_energy_statistics', 'import_sum_statistics', 'price_history'],
           }.items():
               missing = [m for m in methods if not callable(getattr(cls, m, None))]
               assert not missing, f'{cls.__name__} is missing {missing}'

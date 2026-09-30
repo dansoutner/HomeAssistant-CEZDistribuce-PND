@@ -34,6 +34,21 @@ Po správném nastavení a spuštění doplňku vznikne v Home Assistant zaříz
 
 Kromě senzorů doplněk nahrává 15minutová data za celý interval (`data_interval`) jako **dlouhodobé statistiky** `pnd:consumption` a `pnd:production` (s `id` např. `pnd:consumption_chata`). Home Assistant ukládá statistiky po hodinách, čtvrthodiny se proto sčítají do hodinových kWh. Statistiky lze přidat do **Energy dashboardu** (Nastavení > Energie > Spotřeba ze sítě / Vrácení do sítě > vyhledat "PND Consumption" resp. "PND Production") včetně celé historie z intervalu. Při každém běhu se data za interval přepíšou, takže opravy dat na portále se promítnou zpětně.
 
+### Náklady podle spotové ceny (volitelné)
+Pokud máte v HA senzor s aktuální spotovou cenou elektřiny (např. `sensor.current_spot_electricity_price_15min` z integrace spotových cen), vyplňte v nastavení doplňku volbu **spot_price_entity**:
+```yaml
+spot_price_entity: sensor.current_spot_electricity_price_15min
+```
+Doplněk pak ke každé čtvrthodině odběru přiřadí spotovou cenu téže čtvrthodiny a vytvoří:
+* **sensor.pnd_consumption_cost** – náklady za poslední den v CZK, v atributech `average_price` (vážená průměrná cena v Kč/kWh), `consumption_kwh` a hodinové náklady (`hours` a `cost`)
+* **dlouhodobou statistiku `pnd:consumption_cost`** (CZK, po hodinách). V Energy dashboardu ji přiřadíte k odběru ze sítě: Nastavení > Energie > Spotřeba ze sítě > "PND Consumption" > **Použít entitu sledující celkové náklady** > "PND Consumption cost".
+
+Poznámky:
+* Počítá se jen **cena silové elektřiny** podle zadaného senzoru, bez distribuce, poplatků a přirážky obchodníka. Zda obsahuje DPH, záleží na nastavení vaší integrace spotových cen.
+* Ceny se berou z **historie stavů** senzoru (atributy obvykle obsahují jen dnešek a zítřek). Home Assistant drží historii ve výchozím nastavení 10 dní, náklady tedy nejde dopočítat zpětně za celý `data_interval`, ale jen za dny, které jsou v historii. Statistika se při každém běhu přepočítá za tyto dny a naváže na předchozí sumu.
+* Senzor ceny může být v Kč/kWh i Kč/MWh, jednotka se převede automaticky.
+* Pokud historie cen chybí, běh neskončí chybou; `sensor.pnd_consumption_cost` bude `unknown` s popisem v atributu `error`.
+
 Výsledkem pak může být například takovýto dashboard (návod na jeho výrobu je popsán níže)
 
 ![](/obrazky/00-prehled.png)
@@ -335,6 +350,10 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
 - [x] Refactor některých částí pro stabilitu při timeoutech, bezpečnost a kvalitu kódu
       
 # Změny
+
+## v2.2.0
+ - [x] Volitelné náklady na odběr podle spotové ceny (volba `spot_price_entity`): senzor `sensor.pnd_consumption_cost` za poslední den a hodinová statistika `pnd:consumption_cost` pro Energy dashboard.
+ - [x] Delší čekání na první profil po „Vyhledat data“: portál si pamatuje naposledy otevřený profil z minulého běhu (klidně 15min data za rok) a jeho načítání překrývalo odkazy.
 
 ## v2.1.1
  - [x] Při selhání otevření portálu se do logu i do atributu `status` senzoru `pnd_script_status` zapíše skutečná příčina (např. síťová chyba prohlížeče).
