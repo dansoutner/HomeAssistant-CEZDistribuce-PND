@@ -372,7 +372,7 @@ class PndRun:
             page.goto(PNDURL, wait_until="load", timeout=60000)
             log("Website Opened")
         except Exception:
-            log("ERROR: Unable to open website - exitting", Colors.RED)
+            log("ERROR: Unable to open website - exiting", Colors.RED)
             raise PndError("ERROR: Nepodařilo se otevřít webovou stránku PND portálu")
         log(f"Current URL: {page.url}")
 
