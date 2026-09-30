@@ -328,8 +328,9 @@ class MqttPublisher:
 
     def set_state(self, key, state, attributes=None):
         state = _normalize_ha_state(state)
-        # Pro unknown ponecháme doslovný řetězec "unknown" ("None" by se v HA zobrazilo jako text)
-        self._publish(self.state_topic(key), state)
+        # "None" je v MQTT sensoru speciální payload pro unknown (PAYLOAD_NONE); doslovné "unknown"
+        # by číselné senzory (kWh, %) odmítly jako nečíselnou hodnotu
+        self._publish(self.state_topic(key), "None" if state == "unknown" else state)
         self._publish(f"{self.base}/{key}/attributes", json.dumps(attributes or {}, ensure_ascii=False))
 
     def close(self):
