@@ -77,9 +77,9 @@ jobs:
           print('pnd.py import OK')
           "
 
-      # Zpracování stažených CSV (denní senzory, kompletnost dat, pnd_data) na vzorových datech
-      - name: Processing tests
-        run: docker run --rm -v "$PWD/tests:/tests:ro" --entrypoint python3 "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" /tests/test_processing.py
+      # tests/test_*.py: zpracování CSV na vzorových datech, navazování statistik
+      - name: Tests
+        run: docker run --rm -v "$PWD/tests:/tests:ro" --entrypoint sh "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" -c 'set -e; for t in /tests/test_*.py; do echo "== $t"; python3 "$t"; done'
 
       - name: Push image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
