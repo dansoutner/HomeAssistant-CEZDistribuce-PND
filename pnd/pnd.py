@@ -1,4 +1,4 @@
-ver = "v2.4.0"
+ver = "v2.4.1"
 import csv
 import datetime
 import json
@@ -139,28 +139,6 @@ def trim_incomplete_tail(rows):
 def day_completeness(quarters):
     """(naměřeno, celkem) čtvrthodin dne; den je kompletní, když jsou naměřené všechny."""
     return sum(1 for q in quarters if q[2]), len(quarters)
-
-
-def pnd_day(s):
-    """Den, ke kterému patří řádek denního profilu: '30.09.2026 24:00:00' = spotřeba za 30. 9.
-
-    Ověřeno na datech: 15min řádky 29.09. 00:15 … 29.09. 24:00 dávají v součtu hodnotu
-    denního řádku '29.09.2026 24:00:00'.
-    """
-    return datetime.datetime.strptime(s.strip()[:10], "%d.%m.%Y").date()
-
-
-def resolve_data_interval(value, today):
-    """'last_365_days' -> '01.10.2025 00:00 - 01.10.2026 00:00' (posledních N celých dní do dnešní půlnoci).
-
-    Cokoli jiného se předá portálu beze změny (pevný interval 'dd.mm.rrrr hh:mm - dd.mm.rrrr hh:mm').
-    """
-    match = re.fullmatch(r"last_(\d+)_days", (value or "").strip().lower())
-    if not match:
-        return value
-    end = today
-    start = end - datetime.timedelta(days=int(match.group(1)))
-    return f"{start:%d.%m.%Y} 00:00 - {end:%d.%m.%Y} 00:00"
 
 
 def pnd_day(s):
@@ -857,36 +835,7 @@ class PndRun:
         self.download_csv(link_text, "daily-production.csv", "denní")
         log("All Done - DAILY DATA DOWNLOADED")
 
-        # Poslední řádek = včerejší den; řádek 'D 24:00:00' je spotřeba za den D
-        date_consumption_str, consumption_value = read_profile_csv(os.path.join(self.download_folder, 'daily-consumption.csv'))[-1]
-        date_production_str, production_value = read_profile_csv(os.path.join(self.download_folder, 'daily-production.csv'))[-1]
-        # Řádek 'D 24:00:00' je spotřeba za den D (dřív se odečítal ještě jeden den navíc)
-        yesterday_consumption = pnd_day(date_consumption_str)
-        yesterday_production = pnd_day(date_production_str)
-
-        log(f"Latest entry: {date_consumption_str} - {consumption_value} kWh", Colors.GREEN)
-        log(f"Latest entry: {date_production_str} - {production_value} kWh", Colors.GREEN)
-
-        self.set_state("consumption", state=consumption_value, attributes={"date": yesterday_consumption.isoformat()})
-        self.set_state("production", state=production_value, attributes={"date": yesterday_production.isoformat()})
-        for kind in ("consumption", "production"):
-            day_str, value, _ = read_profile_csv(os.path.join(self.download_folder, f"daily-{kind}.csv"))[-1]
-            day = pnd_day(day_str)
-            quarters = read_15min_csv(os.path.join(self.download_folder, f"daily-{kind}-15min.csv"))
-            measured, total = day_completeness(quarters)
-            self.data_status[kind] = {"date": day.isoformat(), "measured": measured, "total": total}
-            # Portál zveřejňuje data za včerejšek až během dne; do té doby jsou čtvrthodiny 'neznámá hodnota'
-            # a hodnota je neúplná. Senzory pak nepřepisujeme, MQTT retain drží předchozí den.
-            if not total or measured < total:
-                log(f"WARNING: {kind} {day}: only {measured}/{total} quarters measured, daily sensors kept", Colors.YELLOW)
-                continue
-            log(f"Latest entry: {day_str} - {value} kWh", Colors.GREEN)
-            self.set_state(kind, state=value, attributes={"date": day.isoformat()})
-            self.set_state(f"{kind}_15min", state=f"{sum(q[1] for q in quarters):.3f}", attributes={
-                "date": day.isoformat(),
-                "pndtime": [(end - QUARTER).astimezone(PND_TZ).isoformat() for end, _, _ in quarters],
-                kind: [round(kwh, 4) for _, kwh, _ in quarters],
-            })
+        self.process_daily()
         log("All Done - DAILY DATA PROCESSED")
 
         # ------------------ INTERVAL -----------------------------
@@ -931,6 +880,36 @@ class PndRun:
         self.download_csv(link_text, "range-production-15min.csv", "interval", timeout=180000)
         log("All Done - INTERVAL DATA DOWNLOADED")
 
+        self.process_interval()
+        log("All Done - INTERVAL DATA PROCESSED")
+        self.import_statistics()
+        if self.spot_price_entity:
+            self.update_costs()
+
+    def process_daily(self):
+        """Denní senzory ze stažených daily-*.csv (bez prohlížeče, testováno v CI)."""
+        # Poslední řádek = včerejší den; řádek 'D 24:00:00' je spotřeba za den D
+        for kind in ("consumption", "production"):
+            day_str, value, _ = read_profile_csv(os.path.join(self.download_folder, f"daily-{kind}.csv"))[-1]
+            day = pnd_day(day_str)
+            quarters = read_15min_csv(os.path.join(self.download_folder, f"daily-{kind}-15min.csv"))
+            measured, total = day_completeness(quarters)
+            self.data_status[kind] = {"date": day.isoformat(), "measured": measured, "total": total}
+            # Portál zveřejňuje data za včerejšek až během dne; do té doby jsou čtvrthodiny 'neznámá hodnota'
+            # a hodnota je neúplná. Senzory pak nepřepisujeme, MQTT retain drží předchozí den.
+            if not total or measured < total:
+                log(f"WARNING: {kind} {day}: only {measured}/{total} quarters measured, daily sensors kept", Colors.YELLOW)
+                continue
+            log(f"Latest entry: {day_str} - {value} kWh", Colors.GREEN)
+            self.set_state(kind, state=value, attributes={"date": day.isoformat()})
+            self.set_state(f"{kind}_15min", state=f"{sum(q[1] for q in quarters):.3f}", attributes={
+                "date": day.isoformat(),
+                "pndtime": [(end - QUARTER).astimezone(PND_TZ).isoformat() for end, _, _ in quarters],
+                kind: [round(kwh, 4) for _, kwh, _ in quarters],
+            })
+
+    def process_interval(self):
+        """pnd_data a součty za období ze stažených range-*.csv (bez prohlížeče, testováno v CI)."""
         # Neúplné dny na konci intervalu (bez stavu OK) do pnd_data ani součtů nepatří;
         # výroba se zkrátí na stejnou délku, pole jsou párovaná podle pnddate
         data_consumption = trim_incomplete_tail(read_profile_csv(os.path.join(self.download_folder, 'range-consumption.csv')))
@@ -962,10 +941,6 @@ class PndRun:
         self.set_state("production2consumption", state=str(capped_percentage_diff))
         self.set_state("production2consumptionfull", state=str(percentage_diff))
         self.set_state("production2consumptionfloor", state=str(floored_min_percentage_diff))
-        log("All Done - INTERVAL DATA PROCESSED")
-        self.import_statistics()
-        if self.spot_price_entity:
-            self.update_costs()
 
     def import_statistics(self):
         """Nahraje 15min data celého intervalu jako hodinové externí statistiky (Energy dashboard)."""

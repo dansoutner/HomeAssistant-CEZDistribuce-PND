@@ -358,6 +358,10 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
       
 # Změny
 
+## v2.4.1
+ - [x] Oprava chybného sloučení v2.4.0: do `main` se vrátil starý blok denních senzorů a běh končil chybou `ValueError: too many values to unpack (expected 2)`. Denní senzory se v té době nepřepisovaly.
+ - [x] Zpracování stažených CSV je v samostatných metodách a CI ho testuje na vzorových datech z portálu (kompletní i neúplný den, žádné zdvojené definice v kódu).
+
 ## v2.4.0
  - [x] Denní senzory (`pnd_consumption`, `pnd_production`, `…_15min`, `pnd_consumption_cost`) se přepíšou jen kompletními daty (všechny čtvrthodiny ve stavu „naměřená data OK“). Dosud je noční běh v 00:30 plnil neúplnými hodnotami (např. 0,002 kWh), protože portál data za včerejšek zveřejňuje až během dne – týkalo se to i v1.
  - [x] `sensor.pnd_script_status` má atributy `data_complete` a `data_date` a v `status` popisuje, která data chybí.
