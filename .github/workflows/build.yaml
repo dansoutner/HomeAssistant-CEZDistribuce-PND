@@ -3,9 +3,9 @@ name: Build add-on
 on:
   push:
     branches: [main]
-    paths: ["pnd/**", ".github/workflows/build.yaml"]
+    paths: ["pnd/**", "tests/**", ".github/workflows/build.yaml"]
   pull_request:
-    paths: ["pnd/**", ".github/workflows/build.yaml"]
+    paths: ["pnd/**", "tests/**", ".github/workflows/build.yaml"]
   workflow_dispatch:
 
 permissions:
@@ -76,6 +76,10 @@ jobs:
           assert pnd.slugify('Chata Šumava') == 'chata_sumava'
           print('pnd.py import OK')
           "
+
+      # Zpracování stažených CSV (denní senzory, kompletnost dat, pnd_data) na vzorových datech
+      - name: Processing tests
+        run: docker run --rm -v "$PWD/tests:/tests:ro" --entrypoint python3 "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}" /tests/test_processing.py
 
       - name: Push image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
