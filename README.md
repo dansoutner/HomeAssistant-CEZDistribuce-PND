@@ -358,6 +358,9 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
       
 # Změny
 
+## v2.4.2
+ - [x] Oprava navazování statistik: při každém běhu se kumulativní suma statistiky nákladů `pnd:consumption_cost` navýšila o dosavadní celkový součet. Měsíční dotaz do recorderu vrací sumu celého měsíce, i když jeho konec padne doprostřed, a import na ni pak navázal. Nově se základ bere z hodinových řádků. Stejná chyba hrozila u `pnd:consumption`/`pnd:production`, jakmile se začátek klouzavého intervalu posune do měsíce se spotřebou. Statistiku nákladů zkaženou verzemi 2.2.0–2.4.1 je potřeba jednorázově opravit (viz poznámka u PR).
+
 ## v2.4.1
  - [x] Oprava chybného sloučení v2.4.0: do `main` se vrátil starý blok denních senzorů a běh končil chybou `ValueError: too many values to unpack (expected 2)`. Denní senzory se v té době nepřepisovaly.
  - [x] Zpracování stažených CSV je v samostatných metodách a CI ho testuje na vzorových datech z portálu (kompletní i neúplný den, žádné zdvojené definice v kódu).
