@@ -1,4 +1,4 @@
-ver = "v2.3.0"
+ver = "v2.4.0"
 import csv
 import datetime
 import json
@@ -116,15 +116,51 @@ def slugify(text):
 
 
 def read_profile_csv(path):
-    """Načte denní profil (07/08) jako [(datum, hodnota)].
+    """Načte denní profil (07/08) jako [(datum, hodnota, naměřeno)].
 
     Hodnoty se převádí na text stejně jako dřív přes pandas: má-li sloupec desetinná čísla,
-    je celý float ('0.0'), jinak int ('0').
+    je celý float ('0.0'), jinak int ('0'). Naměřeno = stav 'naměřená data OK' (jinak 'N/A' apod.).
     """
     with open(path, encoding="cp1250", newline="") as f:
         rows = [r for r in list(csv.reader(f, delimiter=";"))[1:] if r and r[0]]
     is_float = any("." in r[1] for r in rows)
-    return [(r[0], float(r[1]) if is_float else int(r[1])) for r in rows]
+    return [(r[0], float(r[1]) if is_float else int(r[1]), len(r) > 2 and "OK" in r[2]) for r in rows]
+
+
+def trim_incomplete_tail(rows):
+    """Odřízne dny na konci, které ještě nemají stav OK (dnešek, včerejšek před zpracováním portálem).
+
+    Starší dny bez OK (např. před instalací elektroměru) zůstávají, jde jen o neúplný konec.
+    """
+    last_ok = max((i for i, r in enumerate(rows) if r[2]), default=None)
+    return rows if last_ok is None else rows[:last_ok + 1]
+
+
+def day_completeness(quarters):
+    """(naměřeno, celkem) čtvrthodin dne; den je kompletní, když jsou naměřené všechny."""
+    return sum(1 for q in quarters if q[2]), len(quarters)
+
+
+def pnd_day(s):
+    """Den, ke kterému patří řádek denního profilu: '30.09.2026 24:00:00' = spotřeba za 30. 9.
+
+    Ověřeno na datech: 15min řádky 29.09. 00:15 … 29.09. 24:00 dávají v součtu hodnotu
+    denního řádku '29.09.2026 24:00:00'.
+    """
+    return datetime.datetime.strptime(s.strip()[:10], "%d.%m.%Y").date()
+
+
+def resolve_data_interval(value, today):
+    """'last_365_days' -> '01.10.2025 00:00 - 01.10.2026 00:00' (posledních N celých dní do dnešní půlnoci).
+
+    Cokoli jiného se předá portálu beze změny (pevný interval 'dd.mm.rrrr hh:mm - dd.mm.rrrr hh:mm').
+    """
+    match = re.fullmatch(r"last_(\d+)_days", (value or "").strip().lower())
+    if not match:
+        return value
+    end = today
+    start = end - datetime.timedelta(days=int(match.group(1)))
+    return f"{start:%d.%m.%Y} 00:00 - {end:%d.%m.%Y} 00:00"
 
 
 def pnd_day(s):
@@ -484,6 +520,24 @@ class PndRun:
             log(f"id '{meter['id']}' upraveno na '{self.id}' (entity_id a statistic_id smí obsahovat jen a-z, 0-9 a _)", Colors.YELLOW)
         self.download_folder = os.path.join(OUTPUT_ROOT, f"pnd{self.suffix}")
         self.page = None
+        # kind -> {"date", "measured", "total"} pro denní data (kompletní = všechny čtvrthodiny naměřené)
+        self.data_status = {}
+
+    def daily_complete(self, kind):
+        s = self.data_status.get(kind)
+        return bool(s and s["total"] and s["measured"] == s["total"])
+
+    def completeness_status(self):
+        """Atributy a text pro sensor.pnd_script_status podle kompletnosti denních dat."""
+        missing = [k for k in ("consumption", "production") if not self.daily_complete(k)]
+        day = (self.data_status.get("consumption") or self.data_status.get("production") or {}).get("date")
+        attrs = {"data_complete": not missing, "data_date": day}
+        if not missing:
+            return "Finished", attrs
+        names = {"consumption": "spotřeba", "production": "výroba"}
+        detail = ", ".join(f"{names[k]} {self.data_status.get(k, {}).get('measured', 0)}/"
+                           f"{self.data_status.get(k, {}).get('total', 0)} čtvrthodin" for k in missing)
+        return f"Finished – data za {day} ještě nejsou kompletní ({detail}), denní senzory ponechány", attrs
 
     # --- helpers -----------------------------------------------------------
 
@@ -612,7 +666,10 @@ class PndRun:
         self.zip_debug()
         script_duration = dt.now() - script_start_time
         self.set_state("script_duration", state=script_duration)
-        self.set_state("script_status", state="Stopped", attributes={"status": "Finished"})
+        status, attrs = self.completeness_status()
+        self.set_state("script_status", state="Stopped", attributes={"status": status[:255], **attrs})
+        if not attrs["data_complete"]:
+            log(status, Colors.YELLOW)
         log(f"********************* Duration: {script_duration} *********************", Colors.CYAN)
         log(f"********************* Finished {ver}{self.suffix} *********************", Colors.CYAN)
         return True
@@ -800,7 +857,7 @@ class PndRun:
         self.download_csv(link_text, "daily-production.csv", "denní")
         log("All Done - DAILY DATA DOWNLOADED")
 
-        # Poslední řádek = včerejší den
+        # Poslední řádek = včerejší den; řádek 'D 24:00:00' je spotřeba za den D
         date_consumption_str, consumption_value = read_profile_csv(os.path.join(self.download_folder, 'daily-consumption.csv'))[-1]
         date_production_str, production_value = read_profile_csv(os.path.join(self.download_folder, 'daily-production.csv'))[-1]
         # Řádek 'D 24:00:00' je spotřeba za den D (dřív se odečítal ještě jeden den navíc)
@@ -813,9 +870,20 @@ class PndRun:
         self.set_state("consumption", state=consumption_value, attributes={"date": yesterday_consumption.isoformat()})
         self.set_state("production", state=production_value, attributes={"date": yesterday_production.isoformat()})
         for kind in ("consumption", "production"):
+            day_str, value, _ = read_profile_csv(os.path.join(self.download_folder, f"daily-{kind}.csv"))[-1]
+            day = pnd_day(day_str)
             quarters = read_15min_csv(os.path.join(self.download_folder, f"daily-{kind}-15min.csv"))
+            measured, total = day_completeness(quarters)
+            self.data_status[kind] = {"date": day.isoformat(), "measured": measured, "total": total}
+            # Portál zveřejňuje data za včerejšek až během dne; do té doby jsou čtvrthodiny 'neznámá hodnota'
+            # a hodnota je neúplná. Senzory pak nepřepisujeme, MQTT retain drží předchozí den.
+            if not total or measured < total:
+                log(f"WARNING: {kind} {day}: only {measured}/{total} quarters measured, daily sensors kept", Colors.YELLOW)
+                continue
+            log(f"Latest entry: {day_str} - {value} kWh", Colors.GREEN)
+            self.set_state(kind, state=value, attributes={"date": day.isoformat()})
             self.set_state(f"{kind}_15min", state=f"{sum(q[1] for q in quarters):.3f}", attributes={
-                "date": (quarters[0][0] - QUARTER).astimezone(PND_TZ).date().isoformat() if quarters else None,
+                "date": day.isoformat(),
                 "pndtime": [(end - QUARTER).astimezone(PND_TZ).isoformat() for end, _, _ in quarters],
                 kind: [round(kwh, 4) for _, kwh, _ in quarters],
             })
@@ -863,18 +931,20 @@ class PndRun:
         self.download_csv(link_text, "range-production-15min.csv", "interval", timeout=180000)
         log("All Done - INTERVAL DATA DOWNLOADED")
 
-        data_consumption = read_profile_csv(os.path.join(self.download_folder, 'range-consumption.csv'))
-        data_production = read_profile_csv(os.path.join(self.download_folder, 'range-production.csv'))
+        # Neúplné dny na konci intervalu (bez stavu OK) do pnd_data ani součtů nepatří;
+        # výroba se zkrátí na stejnou délku, pole jsou párovaná podle pnddate
+        data_consumption = trim_incomplete_tail(read_profile_csv(os.path.join(self.download_folder, 'range-consumption.csv')))
+        data_production = read_profile_csv(os.path.join(self.download_folder, 'range-production.csv'))[:len(data_consumption)]
 
-        date_str = [pnd_day(d).isoformat() for d, _ in data_consumption]
-        consumption_str = [str(v) for _, v in data_consumption]
-        production_str = [str(v) for _, v in data_production]
+        date_str = [pnd_day(d).isoformat() for d, _, _ in data_consumption]
+        consumption_str = [str(v) for _, v, _ in data_consumption]
+        production_str = [str(v) for _, v, _ in data_production]
 
         self.set_state("data", state=dt.now().strftime("%Y-%m-%d %H:%M:%S"), attributes={
             "pnddate": date_str, "consumption": consumption_str, "production": production_str
         })
-        total_consumption = "{:.2f}".format(sum(v for _, v in data_consumption))
-        total_production = "{:.2f}".format(sum(v for _, v in data_production))
+        total_consumption = "{:.2f}".format(sum(v for _, v, _ in data_consumption))
+        total_production = "{:.2f}".format(sum(v for _, v, _ in data_production))
         self.set_state("total_interval_consumption", state=total_consumption)
         self.set_state("total_interval_production", state=total_production)
         try:
@@ -937,24 +1007,28 @@ class PndRun:
             if not history:
                 raise PndError(f"historie ceny {entity} je prázdná")
 
-            prices = quarter_prices(daily, history)
-            if not daily or None in prices:
-                raise PndError(f"historie ceny {entity} nepokrývá den {day}")
-            hours = {}
-            for (q_end, kwh, _), price in zip(daily, prices):
-                hour = (q_end - QUARTER).astimezone(PND_TZ).replace(minute=0).isoformat()
-                hours[hour] = hours.get(hour, 0.0) + kwh * price
-            kwh_total = sum(q[1] for q in daily)
-            cost_total = sum(hours.values())
-            self.set_state("consumption_cost", state=f"{cost_total:.2f}", attributes={
-                "date": day,
-                "consumption_kwh": round(kwh_total, 3),
-                "average_price": round(cost_total / kwh_total, 4) if kwh_total else None,
-                "price_entity": entity,
-                "hours": list(hours),
-                "cost": [round(v, 4) for v in hours.values()],
-            })
-            log(f"Cost {day}: {cost_total:.2f} {CURRENCY} for {kwh_total:.3f} kWh", Colors.GREEN)
+            if not self.daily_complete("consumption"):
+                # Neúplný den: senzor nákladů jako ostatní denní senzory nepřepisujeme
+                log(f"WARNING: Consumption for {day} incomplete, cost sensor kept", Colors.YELLOW)
+            else:
+                prices = quarter_prices(daily, history)
+                if not daily or None in prices:
+                    raise PndError(f"historie ceny {entity} nepokrývá den {day}")
+                hours = {}
+                for (q_end, kwh, _), price in zip(daily, prices):
+                    hour = (q_end - QUARTER).astimezone(PND_TZ).replace(minute=0).isoformat()
+                    hours[hour] = hours.get(hour, 0.0) + kwh * price
+                kwh_total = sum(q[1] for q in daily)
+                cost_total = sum(hours.values())
+                self.set_state("consumption_cost", state=f"{cost_total:.2f}", attributes={
+                    "date": day,
+                    "consumption_kwh": round(kwh_total, 3),
+                    "average_price": round(cost_total / kwh_total, 4) if kwh_total else None,
+                    "price_entity": entity,
+                    "hours": list(hours),
+                    "cost": [round(v, 4) for v in hours.values()],
+                })
+                log(f"Cost {day}: {cost_total:.2f} {CURRENCY} for {kwh_total:.3f} kWh", Colors.GREEN)
 
             statistic_id = f"pnd:consumption_cost{self.suffix}"
             interval_prices = quarter_prices(interval, history)
@@ -972,9 +1046,10 @@ class PndRun:
         except Exception as e:
             reason = first_line(e)
             log(f"ERROR: Failed to compute consumption cost: {reason}", Colors.RED)
-            self.set_state("consumption_cost", state=None, attributes={
-                "date": day, "price_entity": entity, "error": reason[:255],
-            })
+            if self.daily_complete("consumption"):  # neúplný den: senzor ponechat i při chybě
+                self.set_state("consumption_cost", state=None, attributes={
+                    "date": day, "price_entity": entity, "error": reason[:255],
+                })
 
 
 def main():

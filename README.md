@@ -126,31 +126,38 @@ Při úspěšném chodu skriptu:
 * je vypnut binární senzor pnd_running (pokud není tento senzor vypnut po cca 2 minutách, přejděte na [řešení problémů](#%C5%99e%C5%A1en%C3%AD-probl%C3%A9m%C5%AF-se-skriptem)
 
 ### Nastavení automatické aktualizace dat
-Nejsnazší cestou je vytvoření automatizace, která doplněk v pravidelném čase spustí akcí `hassio.addon_start`.
-1. Zjistěte slug doplňku: je to poslední část URL na stránce doplňku, např. `a1b2c3d4_pnd`
-2. V Home Assistant zvolte "Nastavení" > "Automatizace a scény" a vytvořte novou automatizaci
-   * spouštěč "Čas": data na portále jsou dostupná několik minut po půlnoci, můžete nastavit např. 00:30:00
-   * akce "Home Assistant Supervisor: Spustit doplněk" a vyberte ČEZ Distribuce PND
-3. Uložte automatizaci
+Doplněk se spouští automatizací akcí `hassio.app_start` (starší název `hassio.addon_start`). Slug doplňku je poslední část URL na stránce doplňku, např. `a1b2c3d4_pnd`.
 
-Ověřte funkčnost nastavení > vpravo nahoře tři tečky > "Spustit"
+> [!IMPORTANT]
+> **Data za včerejšek nejsou na portále hned po půlnoci kompletní.** Ještě ráno bývají čtvrthodiny ve stavu „neznámá hodnota“ a denní hodnota je neúplná (např. 0,002 kWh). Doplněk proto denní senzory (`sensor.pnd_consumption`, `…_15min`, `sensor.pnd_consumption_cost`, výroba) přepíše **jen kompletními daty**; jinak ponechá předchozí den a v `sensor.pnd_script_status` uvede `data_complete: false`. Dlouhodobé statistiky berou vždy jen naměřené čtvrthodiny.
 
-Chod skriptu trvá cca 1 minutu, poté byste měli vidět odpovídající entity v HA.
+Doporučená automatizace proto doplněk spouští **každou hodinu mezi 6:00 a 23:00, dokud nejsou v HA kompletní data za včerejšek**. Jakmile je portál zveřejní, další běhy ten den už neproběhnou (přihlášení do portálu tedy jen tolikrát, kolikrát je potřeba). Z historie `sensor.pnd_consumption` (kdy se změnil) pak uvidíte, v kolik portál data obvykle zveřejňuje, a interval si můžete zúžit.
 
-YAML kód automatizace
 ```yaml
 alias: Run PND
-description: ""
+description: Stahuje data z PND, dokud nejsou kompletní data za včerejšek.
 triggers:
-  - trigger: time
-    at: "00:30:00"
-conditions: []
+  - trigger: time_pattern
+    minutes: "15"
+conditions:
+  - condition: time
+    after: "06:00:00"
+    before: "23:00:00"
+  - condition: state
+    entity_id: binary_sensor.pnd_running
+    state: "off"
+  # sensor.pnd_consumption má v atributu date den, za který má kompletní data
+  - condition: template
+    value_template: >-
+      {{ state_attr('sensor.pnd_consumption', 'date') != (now().date() - timedelta(days=1)) | string }}
 actions:
-  - action: hassio.addon_start
+  - action: hassio.app_start
     data:
-      addon: a1b2c3d4_pnd
+      app: a1b2c3d4_pnd
 mode: single
 ```
+
+Ověřte funkčnost nastavení > vpravo nahoře tři tečky > "Spustit". Chod skriptu trvá cca 1 minutu.
 
 Spouštěč na start Home Assistanta není potřeba: senzory jsou uložené v MQTT brokeru a po restartu HA mají hned poslední hodnoty.
 
@@ -350,6 +357,12 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
 - [x] Refactor některých částí pro stabilitu při timeoutech, bezpečnost a kvalitu kódu
       
 # Změny
+
+## v2.4.0
+ - [x] Denní senzory (`pnd_consumption`, `pnd_production`, `…_15min`, `pnd_consumption_cost`) se přepíšou jen kompletními daty (všechny čtvrthodiny ve stavu „naměřená data OK“). Dosud je noční běh v 00:30 plnil neúplnými hodnotami (např. 0,002 kWh), protože portál data za včerejšek zveřejňuje až během dne – týkalo se to i v1.
+ - [x] `sensor.pnd_script_status` má atributy `data_complete` a `data_date` a v `status` popisuje, která data chybí.
+ - [x] Neúplné dny na konci intervalu se nezapočítávají do `sensor.pnd_data` ani do součtů za období.
+ - [x] Nová doporučená automatizace: spouštění každou hodinu 6:00–23:00, dokud nejsou kompletní data za včerejšek.
 
 ## v2.3.0
  - [x] Oprava data u `sensor.pnd_consumption` a `sensor.pnd_production`: atribut `date` byl o den pozadu (např. `2026-09-29T23:59:00` u hodnoty za 30. 9.). Řádek `D 24:00:00` z portálu je spotřeba za den D; atribut je teď `2026-09-30`, stejně jako u 15min senzorů a v `pnddate`. Chyba pocházela už z v1 (`conv_date` − 1 den), `pnddate` a statistiky byly správně.
