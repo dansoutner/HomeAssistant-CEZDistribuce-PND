@@ -20,17 +20,27 @@ Volitelně `spot_price_entity: sensor.current_spot_electricity_price_15min` (sen
 
 ## Spouštění
 
-Doplněk se spouští automatizací:
+Data za včerejšek portál zveřejňuje až během dne; do té doby doplněk denní senzory nepřepisuje (`sensor.pnd_script_status` má `data_complete: false`). Doporučená automatizace proto zkouší každou hodinu, dokud nejsou kompletní:
 
 ```yaml
 alias: Run PND
 triggers:
-  - trigger: time
-    at: "00:30:00"
+  - trigger: time_pattern
+    minutes: "15"
+conditions:
+  - condition: time
+    after: "06:00:00"
+    before: "23:00:00"
+  - condition: state
+    entity_id: binary_sensor.pnd_running
+    state: "off"
+  - condition: template
+    value_template: >-
+      {{ state_attr('sensor.pnd_consumption', 'date') != (now().date() - timedelta(days=1)) | string }}
 actions:
-  - action: hassio.addon_start
+  - action: hassio.app_start
     data:
-      addon: xxxxxxxx_pnd   # slug doplňku, viz URL stránky doplňku
+      app: xxxxxxxx_pnd   # slug doplňku, viz URL stránky doplňku
 mode: single
 ```
 
