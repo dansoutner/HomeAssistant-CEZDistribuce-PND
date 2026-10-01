@@ -163,6 +163,28 @@ def resolve_data_interval(value, today):
     return f"{start:%d.%m.%Y} 00:00 - {end:%d.%m.%Y} 00:00"
 
 
+def pnd_day(s):
+    """Den, ke kterému patří řádek denního profilu: '30.09.2026 24:00:00' = spotřeba za 30. 9.
+
+    Ověřeno na datech: 15min řádky 29.09. 00:15 … 29.09. 24:00 dávají v součtu hodnotu
+    denního řádku '29.09.2026 24:00:00'.
+    """
+    return datetime.datetime.strptime(s.strip()[:10], "%d.%m.%Y").date()
+
+
+def resolve_data_interval(value, today):
+    """'last_365_days' -> '01.10.2025 00:00 - 01.10.2026 00:00' (posledních N celých dní do dnešní půlnoci).
+
+    Cokoli jiného se předá portálu beze změny (pevný interval 'dd.mm.rrrr hh:mm - dd.mm.rrrr hh:mm').
+    """
+    match = re.fullmatch(r"last_(\d+)_days", (value or "").strip().lower())
+    if not match:
+        return value
+    end = today
+    start = end - datetime.timedelta(days=int(match.group(1)))
+    return f"{start:%d.%m.%Y} 00:00 - {end:%d.%m.%Y} 00:00"
+
+
 def parse_local_end(s):
     """'29.09.2026 24:00:00' -> naive 30.09.2026 00:00 (PND značí konec intervalu, 24:00 = půlnoc)."""
     if s.endswith("24:00:00"):
@@ -836,6 +858,17 @@ class PndRun:
         log("All Done - DAILY DATA DOWNLOADED")
 
         # Poslední řádek = včerejší den; řádek 'D 24:00:00' je spotřeba za den D
+        date_consumption_str, consumption_value = read_profile_csv(os.path.join(self.download_folder, 'daily-consumption.csv'))[-1]
+        date_production_str, production_value = read_profile_csv(os.path.join(self.download_folder, 'daily-production.csv'))[-1]
+        # Řádek 'D 24:00:00' je spotřeba za den D (dřív se odečítal ještě jeden den navíc)
+        yesterday_consumption = pnd_day(date_consumption_str)
+        yesterday_production = pnd_day(date_production_str)
+
+        log(f"Latest entry: {date_consumption_str} - {consumption_value} kWh", Colors.GREEN)
+        log(f"Latest entry: {date_production_str} - {production_value} kWh", Colors.GREEN)
+
+        self.set_state("consumption", state=consumption_value, attributes={"date": yesterday_consumption.isoformat()})
+        self.set_state("production", state=production_value, attributes={"date": yesterday_production.isoformat()})
         for kind in ("consumption", "production"):
             day_str, value, _ = read_profile_csv(os.path.join(self.download_folder, f"daily-{kind}.csv"))[-1]
             day = pnd_day(day_str)
