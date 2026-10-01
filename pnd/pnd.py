@@ -1,4 +1,4 @@
-ver = "v2.2.0"
+ver = "v2.3.0"
 import csv
 import datetime
 import json
@@ -115,11 +115,6 @@ def slugify(text):
     return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
 
 
-def conv_date(s):
-    s = s.replace("24:00:00", "23:59:00")
-    return datetime.datetime.strptime(s, "%d.%m.%Y %H:%M:%S")
-
-
 def read_profile_csv(path):
     """Načte denní profil (07/08) jako [(datum, hodnota)].
 
@@ -130,6 +125,28 @@ def read_profile_csv(path):
         rows = [r for r in list(csv.reader(f, delimiter=";"))[1:] if r and r[0]]
     is_float = any("." in r[1] for r in rows)
     return [(r[0], float(r[1]) if is_float else int(r[1])) for r in rows]
+
+
+def pnd_day(s):
+    """Den, ke kterému patří řádek denního profilu: '30.09.2026 24:00:00' = spotřeba za 30. 9.
+
+    Ověřeno na datech: 15min řádky 29.09. 00:15 … 29.09. 24:00 dávají v součtu hodnotu
+    denního řádku '29.09.2026 24:00:00'.
+    """
+    return datetime.datetime.strptime(s.strip()[:10], "%d.%m.%Y").date()
+
+
+def resolve_data_interval(value, today):
+    """'last_365_days' -> '01.10.2025 00:00 - 01.10.2026 00:00' (posledních N celých dní do dnešní půlnoci).
+
+    Cokoli jiného se předá portálu beze změny (pevný interval 'dd.mm.rrrr hh:mm - dd.mm.rrrr hh:mm').
+    """
+    match = re.fullmatch(r"last_(\d+)_days", (value or "").strip().lower())
+    if not match:
+        return value
+    end = today
+    start = end - datetime.timedelta(days=int(match.group(1)))
+    return f"{start:%d.%m.%Y} 00:00 - {end:%d.%m.%Y} 00:00"
 
 
 def parse_local_end(s):
@@ -456,7 +473,9 @@ class PndRun:
         self.mqtt = None
         self.username = meter["username"]
         self.password = meter["password"]
-        self.datainterval = meter["data_interval"]
+        self.datainterval = resolve_data_interval(meter["data_interval"], dt.now(PND_TZ).date())
+        if self.datainterval != meter["data_interval"]:
+            log(f"data_interval '{meter['data_interval']}' -> '{self.datainterval}'")
         self.ELM = str(meter["elm"])
         # id jde do entity_id, statistic_id i názvu složky, proto slug
         self.id = slugify(meter.get("id") or "")
@@ -784,8 +803,9 @@ class PndRun:
         # Poslední řádek = včerejší den
         date_consumption_str, consumption_value = read_profile_csv(os.path.join(self.download_folder, 'daily-consumption.csv'))[-1]
         date_production_str, production_value = read_profile_csv(os.path.join(self.download_folder, 'daily-production.csv'))[-1]
-        yesterday_consumption = conv_date(date_consumption_str) - datetime.timedelta(days=1)
-        yesterday_production = conv_date(date_production_str) - datetime.timedelta(days=1)
+        # Řádek 'D 24:00:00' je spotřeba za den D (dřív se odečítal ještě jeden den navíc)
+        yesterday_consumption = pnd_day(date_consumption_str)
+        yesterday_production = pnd_day(date_production_str)
 
         log(f"Latest entry: {date_consumption_str} - {consumption_value} kWh", Colors.GREEN)
         log(f"Latest entry: {date_production_str} - {production_value} kWh", Colors.GREEN)
@@ -846,7 +866,7 @@ class PndRun:
         data_consumption = read_profile_csv(os.path.join(self.download_folder, 'range-consumption.csv'))
         data_production = read_profile_csv(os.path.join(self.download_folder, 'range-production.csv'))
 
-        date_str = [conv_date(d).date().isoformat() for d, _ in data_consumption]
+        date_str = [pnd_day(d).isoformat() for d, _ in data_consumption]
         consumption_str = [str(v) for _, v in data_consumption]
         production_str = [str(v) for _, v in data_production]
 

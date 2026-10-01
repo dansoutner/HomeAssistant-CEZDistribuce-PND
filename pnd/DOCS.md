@@ -11,7 +11,7 @@ meters:
   - username: "vas@email.cz"
     password: "heslo"
     elm: "3000012345"
-    data_interval: "27.10.2023 00:00 - 27.10.2024 00:00"
+    data_interval: "last_365_days"
 ```
 
 Pro více elektroměrů přidejte další položku a vyplňte `id`. Entity pak dostanou příponu, např. `sensor.pnd_consumption_chata`.

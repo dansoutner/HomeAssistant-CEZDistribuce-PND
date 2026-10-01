@@ -3,7 +3,7 @@ configuration:
     name: Meters
     description: >-
       Meters to download. username = portal e-mail, password = portal password,
-      elm = meter number (without "ELM "), data_interval = range in the form
+      elm = meter number (without "ELM "), data_interval = "last_365_days" (rolling last N days, recommended) or a fixed range in the form
       "27.10.2023 00:00 - 27.10.2024 00:00", id = optional entity suffix (e.g. "cottage" → sensor.pnd_consumption_cottage).
   spot_price_entity:
     name: Spot price entity

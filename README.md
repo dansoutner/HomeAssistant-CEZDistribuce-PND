@@ -99,7 +99,7 @@ Přihlašovací údaje k brokeru si doplněk PND převezme od Home Assistanta s�
 4. Na záložce "Nastavení" vyplňte (přepněte do YAML režimu):
    * **username** je váš email s přihlášením do portálu
    * **password** je heslo pro přihlášení
-   * **data_interval** je interval dat, které budete chtít stahovat - například období fixace smlouvy. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
+   * **data_interval** je interval dat, které budete chtít stahovat. Doporučená hodnota je `last_365_days` (obecně `last_N_days`): při každém běhu se přepočítá na posledních N celých dní do dnešní půlnoci, takže se statistiky a Energy dashboard doplňují samy. Pevný interval ve tvaru `27.10.2023 00:00 - 27.10.2024 00:00` (např. období fixace smlouvy) funguje dál, ale po jeho konci se do statistik nové dny nedostanou. Nedoporučuji víc jak rok, mohlo by zahltit databázi.
    * **elm** je číslo (pouze číslo, nikoliv ELM 3000000000) vašeho elektroměru, který chcete sledovat v HA. Zjistíte jej v Portále - viz obrázek níže
    * **id** (volitelné) přípona entit, pokud sledujete více elektroměrů, např. `chata` → `sensor.pnd_consumption_chata`. Převede se na malá písmena bez diakritiky a mezer (`Chata Šumava` → `chata_sumava`), protože Home Assistant jiné znaky v `entity_id` ani ve statistikách nepovoluje.
 
@@ -110,7 +110,7 @@ meters:
   - username: "vas email s prihlasenim do portalu distribuce"
     password: "vase heslo do portalu distribuce"
     elm: "3000012345"
-    data_interval: "27.10.2023 00:00 - 27.10.2024 00:00"
+    data_interval: "last_365_days"
 ```
 Pro více elektroměrů přidejte do seznamu `meters` další položku s vyplněným `id`. Elektroměry se zpracují postupně v jednom běhu.
 
@@ -350,6 +350,10 @@ Pokud máte nějaké přání, nápad na vylepšení - vytvořte požadavek zde 
 - [x] Refactor některých částí pro stabilitu při timeoutech, bezpečnost a kvalitu kódu
       
 # Změny
+
+## v2.3.0
+ - [x] Oprava data u `sensor.pnd_consumption` a `sensor.pnd_production`: atribut `date` byl o den pozadu (např. `2026-09-29T23:59:00` u hodnoty za 30. 9.). Řádek `D 24:00:00` z portálu je spotřeba za den D; atribut je teď `2026-09-30`, stejně jako u 15min senzorů a v `pnddate`. Chyba pocházela už z v1 (`conv_date` − 1 den), `pnddate` a statistiky byly správně.
+ - [x] Klouzavý interval: `data_interval: last_365_days` (obecně `last_N_days`) se při každém běhu přepočítá na posledních N dní do dnešní půlnoci. Pevný interval přestane po svém konci plnit statistiky a Energy dashboard.
 
 ## v2.2.0
  - [x] Volitelné náklady na odběr podle spotové ceny (volba `spot_price_entity`): senzor `sensor.pnd_consumption_cost` za poslední den a hodinová statistika `pnd:consumption_cost` pro Energy dashboard.
