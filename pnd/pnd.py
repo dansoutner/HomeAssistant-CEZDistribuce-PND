@@ -1,4 +1,4 @@
-ver = "v2.4.1"
+ver = "v2.4.2"
 import csv
 import datetime
 import json
@@ -340,17 +340,26 @@ class HomeAssistant:
             conn.close()
 
     def last_sum_before(self, statistic_id, before):
-        """Poslední kumulativní suma statistiky před daným časem (0, pokud žádná není)."""
-        [result] = self.ws({
-            "type": "recorder/statistics_during_period",
-            "start_time": "2000-01-01T00:00:00+00:00",
-            "end_time": before.isoformat(),
-            "statistic_ids": [statistic_id],
-            "period": "month",
-            "types": ["sum"],
-        })
-        rows = (result or {}).get(statistic_id) or []
-        return (rows[-1].get("sum") or 0.0) if rows else 0.0
+        """Poslední kumulativní suma statistiky před daným časem (0, pokud žádná není).
+
+        Pozor: s period month/day vrací recorder u posledního bucketu sumu celého bucketu, i když
+        end_time padne doprostřed (ověřeno: měsíc s koncem 22. 9. vrátil sumu k 30. 9.), a import
+        by pak navazoval na budoucí hodnotu. Proto hodinové řádky (jen start < end_time): nejdřív
+        posledních 35 dní, a když tam nic není, celá historie.
+        """
+        for start in (before - datetime.timedelta(days=35), datetime.datetime(2000, 1, 1, tzinfo=UTC)):
+            [result] = self.ws({
+                "type": "recorder/statistics_during_period",
+                "start_time": start.isoformat(),
+                "end_time": before.isoformat(),
+                "statistic_ids": [statistic_id],
+                "period": "hour",
+                "types": ["sum"],
+            })
+            rows = (result or {}).get(statistic_id) or []
+            if rows:
+                return rows[-1].get("sum") or 0.0
+        return 0.0
 
     def import_energy_statistics(self, statistic_id, name, stats):
         self.import_sum_statistics(statistic_id, name, "kWh", "energy", stats)
